@@ -21,6 +21,7 @@ mod landscape;
 mod lightmap;
 mod look;
 mod mods;
+mod pad;
 mod particles;
 mod npc;
 mod physics;
@@ -37,6 +38,8 @@ mod test_mutators;
 mod test_menu_flow;
 mod test_menus;
 mod test_npc;
+mod test_pad;
+mod test_fly;
 mod test_destruct;
 mod test_quests;
 mod test_tricks;
@@ -54,7 +57,7 @@ pub struct Args {
     pub test: Option<String>,
     pub shot: Option<String>,
     pub start: usize,
-    /// Test runs open on the second monitor unless `--main-monitor` is given.
+    /// Test runs open on the main monitor unless `--second-monitor` is given.
     pub main_monitor: bool,
     /// Boot into the original main menu (a plain launch; `--no-menu`, `--map` and tests skip it,
     /// `--test mainmenu` uses it).
@@ -72,7 +75,7 @@ fn parse_args() -> Args {
         test: get("--test"),
         shot: get("--shot"),
         start: get("--start").and_then(|s| s.parse().ok()).unwrap_or(0),
-        main_monitor: a.iter().any(|x| x == "--main-monitor"),
+        main_monitor: !a.iter().any(|x| x == "--second-monitor"),
         menu: (get("--test").is_none() && get("--map").is_none() && !a.iter().any(|x| x == "--no-menu")) || get("--test").as_deref() == Some("mainmenu"),
     }
 }
@@ -132,7 +135,7 @@ fn main() {
     let window = Window {
         title: "Goat Simulator (Rust)".into(),
         resolution: (1600, 900).into(),
-        // automated runs are moved to the second monitor (see test.rs) and never take focus
+        // automated runs open on the main monitor (see test.rs) and never take focus
         position: WindowPosition::Automatic,
         focused: !testing,
         visible: !testing,
@@ -152,6 +155,7 @@ fn main() {
         .insert_resource(GlobalAmbientLight { color: Color::srgb(0.75, 0.82, 1.0), brightness: 900.0, affects_lightmapped_meshes: false, ..default() })
         .insert_resource(DirectionalLightShadowMap { size: 4096 })
         .init_resource::<InputState>()
+        .init_resource::<pad::PadState>()
         .init_resource::<audio::SoundQueue>()
         .init_resource::<audio::SoundLog>()
         .init_resource::<score::Score>()

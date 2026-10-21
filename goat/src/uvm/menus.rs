@@ -446,6 +446,7 @@ pub fn scaleform_menus(
     mut images: ResMut<Assets<Image>>,
     mut overlay: Query<(&mut Visibility, &MenuOverlay)>,
     mut commands: Commands,
+    pads: Query<&bevy::input::gamepad::Gamepad>,
 ) {
     let _prof_scope = crate::prof::scope("menus::scaleform_menus");
     let Some(h) = m.host.as_mut() else {
@@ -464,7 +465,9 @@ pub fn scaleform_menus(
     let was_open = gfx::menu_open(&h.vm);
     // test runs only take the synthetic input in MenuTest, never the user's mouse and keys
     let live = scripted.is_none();
-    let open_request = test.open_pause || (live && !was_open && !mod_menu_open && keys.just_pressed(KeyCode::Escape));
+    let pad = if live || crate::pad::in_tests() { crate::pad::active(&pads) } else { None };
+    let start = pad.is_some_and(|p| p.just_pressed(bevy::input::gamepad::GamepadButton::Start));
+    let open_request = test.open_pause || (!was_open && !mod_menu_open && ((live && keys.just_pressed(KeyCode::Escape)) || start));
     if std::mem::take(&mut h.pending_main_menu) {
         let ok = h.with_vm(|h| {
             gfx::set_size(&mut h.vm, w, hgt);
@@ -510,6 +513,22 @@ pub fn scaleform_menus(
             if keys.just_released(k) && view.down.contains(&n) {
                 key_events.push((n, false));
                 view.down.retain(|d| *d != n);
+            }
+        }
+    }
+    // the pad in a menu: D-pad arrows, A Enter, B / Start Escape
+    if was_open {
+        if let Some(p) = pad {
+            for (b, n) in crate::pad::MENU_KEYS.iter().copied().chain(std::iter::once((bevy::input::gamepad::GamepadButton::Start, "Escape"))) {
+                // only releases of presses the menu saw (the Start that opened it isn't one)
+                if p.just_pressed(b) {
+                    key_events.push((n, true));
+                    view.down.push(n);
+                }
+                if p.just_released(b) && view.down.contains(&n) {
+                    key_events.push((n, false));
+                    view.down.retain(|d| *d != n);
+                }
             }
         }
     } else {

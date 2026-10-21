@@ -120,6 +120,17 @@ pub fn land(phys: &Physics, g: &Goat, center: Vec3, half_height: f32, impact_vel
             ragdoll = true;
         }
     }
+    if std::env::var_os("GOAT_LAND_LOG").is_some() {
+        println!(
+            "    land: ragdoll {ragdoll} perfect {perfect} | up.n {:.2} pitch {:.1} deg | fwd.cam {:.2} hspeed {:.0} | impact {:.0} uu/s tried {:?}",
+            up.dot(normal),
+            g.pitch.to_degrees(),
+            fwd2.dot(cam2),
+            hspeed / convert::S,
+            impact_velocity.length() / convert::S,
+            g.tried_landing_at.map(|at| now - at)
+        );
+    }
     Landing { ragdoll, perfect, floor: probe.map(|p| p.2) }
 }
 

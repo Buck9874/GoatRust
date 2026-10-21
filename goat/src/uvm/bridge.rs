@@ -49,6 +49,50 @@ pub struct GoatValues {
     pub wall_run_speed: f32,
 }
 
+/// A flying goat (Pawn.mCanFly, set by bird mutators such as Flappy Wings): Coffee Stain's
+/// Pawn flight values (Unreal units).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Flight {
+    /// DoBirdFlap: Velocity.Z = mFlapZ, plus a forward push; at most every mAirFlapCooldown s.
+    pub flap_z: f32,
+    pub flap_cooldown: f32,
+    /// Pawn.AirSpeed / mAirAccelRate (steering in the air).
+    pub air_speed: f32,
+    pub air_accel_rate: f32,
+    /// mAirLiftCoefficient (angle of attack in degrees -> lift), mAirDragCoefficient (lift ->
+    /// drag), mAirSpeedLiftCoefficient.
+    pub lift: Vec<(f32, f32)>,
+    pub drag: Vec<(f32, f32)>,
+    pub speed_lift: f32,
+}
+
+static FLIGHT: RwLock<Option<Flight>> = RwLock::new(None);
+
+/// The goat's flight values while it can fly.
+pub fn flight() -> Option<Flight> {
+    FLIGHT.read().unwrap().clone()
+}
+
+/// An InterpCurveFloat's points, linearly between them (the curves are smooth enough).
+pub fn eval_curve(points: &[(f32, f32)], x: f32) -> f32 {
+    match points {
+        [] => 0.0,
+        [p] => p.1,
+        _ => {
+            if x <= points[0].0 {
+                return points[0].1;
+            }
+            for w in points.windows(2) {
+                if x <= w[1].0 {
+                    let t = (x - w[0].0) / (w[1].0 - w[0].0).max(1e-6);
+                    return w[0].1 + (w[1].1 - w[0].1) * t;
+                }
+            }
+            points[points.len() - 1].1
+        }
+    }
+}
+
 /// (values now, values before any mutator ran)
 static VALUES: RwLock<Option<(GoatValues, GoatValues)>> = RwLock::new(None);
 
@@ -169,10 +213,12 @@ pub fn game_mutators() -> Vec<ModEntry> {
 }
 
 /// Mutators for enabled keys: "ws-<workshop id>" items and "gm-<FileName>" game mutators.
+/// The base game's own mutators come first (they set the goat's body; Workshop add-ons such as
+/// Flappy Wings look at it when they attach, "to combine with a bird mutator").
 pub fn mutators_for(keys: &[String]) -> Vec<ModEntry> {
     let dir = crate::mods::mods_dir().join("workshop");
-    let mut out: Vec<ModEntry> = workshop_mutators(&dir).into_iter().filter(|e| keys.iter().any(|k| k.strip_prefix("ws-") == Some(e.id.as_str()))).collect();
-    out.extend(game_mutators().into_iter().filter(|e| keys.iter().any(|k| k.strip_prefix("gm-").is_some_and(|f| f.eq_ignore_ascii_case(&e.class_path)))));
+    let mut out: Vec<ModEntry> = game_mutators().into_iter().filter(|e| keys.iter().any(|k| k.strip_prefix("gm-").is_some_and(|f| f.eq_ignore_ascii_case(&e.class_path)))).collect();
+    out.extend(workshop_mutators(&dir).into_iter().filter(|e| keys.iter().any(|k| k.strip_prefix("ws-") == Some(e.id.as_str()))));
     out
 }
 
@@ -372,6 +418,19 @@ impl Host {
             self.publish();
         }
         let vp = self.vm.globals["viewport"];
+        // GGGameInfo.SortMutators: mutators whose class has mIsAppliedLast move to the end (walked
+        // from the back, each one found is appended)
+        let mut mods: Vec<&ModEntry> = mods.iter().collect();
+        for i in (0..mods.len()).rev() {
+            let last = self.vm.class_by_name(mods[i].class_path.rsplit('.').next().unwrap_or("")).is_some_and(|c| {
+                let cdo = self.vm.cdo(c);
+                self.vm.get(cdo, "mIsAppliedLast").truthy()
+            });
+            if last {
+                let m = mods.remove(i);
+                mods.push(m);
+            }
+        }
         for m in mods {
             self.vm.say(format!("== mutator {} ({}) from workshop item {}", m.display, m.class_path, m.id));
             // the menu marks the mutator as chosen for player slot 0
@@ -513,6 +572,35 @@ impl Host {
         };
         let base = *self.base.get_or_insert(v);
         *VALUES.write().unwrap() = Some((v, base));
+        let flight = self.vm.get(g, "mCanFly").truthy().then(|| {
+            let curve = |h: &mut Host, k: &str| -> Vec<(f32, f32)> {
+                let c = h.vm.get(g, k);
+                let (yp, yi, yo) = (h.vm.sym("Points"), h.vm.sym("InVal"), h.vm.sym("OutVal"));
+                match c {
+                    Value::Struct(s) => match s.field(yp) {
+                        Some(Value::Array(a)) => a
+                            .iter()
+                            .filter_map(|p| match p {
+                                Value::Struct(ps) => Some((ps.field(yi)?.float(), ps.field(yo)?.float())),
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => vec![],
+                    },
+                    _ => vec![],
+                }
+            };
+            Flight {
+                flap_z: f(self, "mFlapZ"),
+                flap_cooldown: f(self, "mAirFlapCooldown"),
+                air_speed: f(self, "AirSpeed"),
+                air_accel_rate: f(self, "mAirAccelRate"),
+                lift: curve(self, "mAirLiftCoefficient"),
+                drag: curve(self, "mAirDragCoefficient"),
+                speed_lift: f(self, "mAirSpeedLiftCoefficient"),
+            }
+        });
+        *FLIGHT.write().unwrap() = flight;
     }
 }
 

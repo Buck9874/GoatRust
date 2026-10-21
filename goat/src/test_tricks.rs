@@ -165,7 +165,9 @@ pub fn tricks_scenario(
                 1 if !g.grounded => {
                     input.freelook = true;
                     input.forward = 1.0;
-                    if g.air_pitch_deg >= 345.0 {
+                    // the turn carries on ~30 degrees after letting go: release early enough that a
+                    // slow frame doesn't overshoot into a bad landing
+                    if g.air_pitch_deg >= 340.0 {
                         st.phase = 2;
                     }
                 }

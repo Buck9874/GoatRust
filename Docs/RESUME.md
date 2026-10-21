@@ -736,17 +736,35 @@ base game and Workshop mods:
 
 ## Next steps (in order)
 
-1. Port the next native/script systems 1:1 using out/decomp (see Docs/FIDELITY.md): props/KActor
-   (GGKActor, explosives, Apex destructibles), mutators, vehicles, Kismet, quests, menus.
-2. Fan specials; race leaderboards are stubs (no online stats); the goat rider (SpawnGoatRider
-   NPC) isn't drawn.
-3. NPC bikers. Static-mesh materials through the diffuse_graph baker (world.rs).
-5. Vehicles; grow the UnrealScript VM (see its
-   section). Menus: pause menu, HUD, main menu with all its views run; the Downloaded list's
-   status column shows N/A (localized labels), inventory (I) isn't ported.
-6. (Landscape: checked, the maps' materials have no normal/specular; the per-component MICs only
-   pick layers.)
-7. Lighting: DLC maps' lightmaps untested. Beam endpoint natives for DLC scripts.
+Done since the old list: inventory, goat rider, static-mesh material baking, particles (mesh,
+beams, ribbons), post-processing, local leaderboards. DLCs dropped (see their section).
+
+- **Controller** (2026-10-20, goat/src/pad.rs): the first connected pad with the original's
+  layout (DefaultInput.ini XboxTypeS_*): left stick moves (L3 sprints until the stick is let go),
+  right stick turns the camera, A jump, B ragdoll, X lick, Y use, RT headbutt, LT free look, LB baa,
+  RB inventory, D-pad up/down zoom, Back slow motion, Start pause; in menus the D-pad, A (Enter) and
+  B / Start (Escape). The scripts also get the pad's buttons by their Unreal names (mutators,
+  inventory). `--test pad` drives a virtual pad through Bevy's gamepad messages. Not tried on a
+  real controller yet.
+- **Flying** (2026-10-20): a goat with Pawn.mCanFly (Flappy Wings with Feather / Classy Goat, or
+  any mod setting it) flaps on jump in the air exactly like Pawn.DoBirdFlap (mFlapZ, forward push,
+  mAirFlapCooldown) and steers at mAirAccelRate up to AirSpeed. The glide is an approximation (the
+  native flight physics, probably Pawn_v25c, isn't ported): lift from mAirLiftCoefficient at the
+  angle of attack, drag from mAirDragCoefficient, scaled so lift 1 at AirSpeed holds height.
+  Mutators now apply the base game's own first, then Workshop ones, then GGGameInfo.SortMutators'
+  mIsAppliedLast rule. `--test fly` (Feather Goat + Flappy Wings 309252666): 33 m climb, 78 m glide.
+- NPC bikers: the base maps have none (GGAIDriverController needs GGVehiclePathNodes, which only
+  the DLC maps have; no Kismet seats an NPC on a bike). Nothing to port.
+- `--test flip` lets go of the backflip at 340 degrees (the turn carries on ~30 degrees; on slow
+  frames 345 landed past the allowed angle). GOAT_LAND_LOG=1 prints each landing's checks.
+- Performance with the PC idle: 6.7 ms main update in town (tick_mutators 1.6, scaleform 1.4).
+- Test windows open on the main monitor (`--second-monitor` for the other).
+
+1. NPC AI through the VM by default (GOAT_NPC_VM=1): today npcvm, route and trip pass with it,
+   but npc (a knocked-down NPC doesn't stand up and panic: GGNpc.StandUp Accessed None, no
+   Actor.MoveSmooth), reactions (the goat isn't noticed) and attack (the guard never kicks) fail.
+2. Split-screen co-op (4 local players).
+3. Fan specials; race leaderboards have no online stats (local only).
 
 ## Menus: Scaleform GFx through Ruffle
 

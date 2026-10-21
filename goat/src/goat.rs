@@ -88,6 +88,8 @@ pub struct Goat {
     /// Rotation accumulated in the air for GGTrickRotation (degrees, signed).
     pub air_yaw_deg: f32,
     pub air_pitch_deg: f32,
+    /// Pawn.mAirFlapTime (seconds, game time) of the last bird flap.
+    pub flap_time: f32,
     /// mJumpOverActors.
     pub jump_over: Vec<crate::air::Below>,
     pub ready_to_wall_run: bool,
@@ -210,6 +212,7 @@ pub fn spawn_goat(commands: &mut Commands, physics: &mut Physics, at: Transform)
                 rot_interp: crate::air::ROT_INTERP_SPEED,
                 air_yaw_deg: 0.0,
                 air_pitch_deg: 0.0,
+                flap_time: -10.0,
                 jump_over: Vec::new(),
                 ready_to_wall_run: false,
                 wall: Default::default(),
@@ -229,10 +232,15 @@ pub fn read_input(
     mouse: Res<ButtonInput<MouseButton>>,
     scripted: Option<Res<ScriptedInput>>,
     menu: Option<Res<crate::mods::ModMenu>>,
+    pads: Query<&bevy::input::gamepad::Gamepad>,
+    mut pad: ResMut<crate::pad::PadState>,
     mut state: ResMut<InputState>,
 ) {
     if let Some(s) = scripted {
         state.0 = s.clone();
+        if let (true, Some(p)) = (crate::pad::in_tests(), crate::pad::active(&pads)) {
+            crate::pad::apply(p, &mut pad.sprint_latch, &mut state.0);
+        }
         return;
     }
     // the inventory list open: the keys navigate it (GGPlayerControllerGame.mInventoryOpen stops
@@ -258,6 +266,9 @@ pub fn read_input(
         cam_dist: None,
         cam_pitch: None,
     };
+    if let Some(p) = crate::pad::active(&pads) {
+        crate::pad::apply(p, &mut pad.sprint_latch, &mut state.0);
+    }
 }
 
 /// GGCameraModeOrbital.UpdateCamera (+ GGPlayerControllerGame.UpdateCameraView, GGCameraMode.Zoom
@@ -272,6 +283,7 @@ pub fn camera_control(
     goat: Query<(&Goat, &Transform, Option<&crate::rig::Animator>, Option<&crate::rig::Rig>)>,
     phys: Res<Physics>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    pads: Query<&bevy::input::gamepad::Gamepad>,
 ) {
     let _prof_scope = crate::prof::scope("goat::camera_control");
     let dt = time.delta_secs().min(0.1);
@@ -285,6 +297,21 @@ pub fn camera_control(
         let (sx, sy) = (if ix { -1.0 } else { 1.0 }, if iy { -1.0 } else { 1.0 });
         c.yaw -= motion.delta.x * 0.003 * k * sx;
         c.pitch = (c.pitch - motion.delta.y * 0.003 * k * sy).clamp(-1.5, 1.5);
+        // the pad's right stick (GBA_TurnLeft_Gamepad / GBA_Look_Gamepad)
+        if let Some(p) = crate::pad::active(&pads) {
+            let r = crate::pad::stick(p.right_stick());
+            c.yaw -= r.x * crate::pad::LOOK_SPEED * dt * k * sx;
+            c.pitch = (c.pitch + r.y * crate::pad::LOOK_SPEED * 0.6 * dt * k * sy).clamp(-1.5, 1.5);
+        }
+    }
+    // D-pad up/down: GBA_ZoomIn / GBA_ZoomOut, a notch per press
+    let pad_zoom = crate::pad::active(&pads).map(|p| {
+        use bevy::input::gamepad::GamepadButton as B;
+        p.just_pressed(B::DPadDown) as i32 as f32 - p.just_pressed(B::DPadUp) as i32 as f32
+    });
+    if let (Some(z), false) = (pad_zoom.filter(|z| *z != 0.0), menu_open) {
+        let (lo, hi) = crate::uvm::bridge::zoom_limits();
+        c.zoom_desired = (c.zoom_desired + uu(cam::ZOOM_UNIT) * z).clamp(uu(lo), uu(hi));
     }
     // GBA_ZoomIn / GBA_ZoomOut: mZoomUnit per notch, clamped; the current zoom lerps (x3)
     if scroll.delta.y != 0.0 && !menu_open {
@@ -531,7 +558,14 @@ pub fn goat_move(
         } else {
             g.braking = false;
             g.brake_slide = false;
-            falling_velocity(v_uu, accel_dir, dt)
+            match crate::uvm::bridge::flight() {
+                // a flying goat steers at mAirAccelRate up to AirSpeed (flaps and dives may go faster)
+                Some(f) if !g.ragdoll => {
+                    let v = v_uu + accel_dir * f.air_accel_rate * dt;
+                    v.clamp_length_max(v_uu.length().max(f.air_speed))
+                }
+                _ => falling_velocity(v_uu, accel_dir, dt),
+            }
         };
         hv = new_v * S;
     }
@@ -560,6 +594,20 @@ pub fn goat_move(
             g.double_jump_ready = true;
             // GGGoat double jump + MaxMultiJump added by Workshop mutators
             g.multi_jump_remaining = 1i32.saturating_add(crate::uvm::bridge::movement().extra_jumps);
+        } else if let Some(f) = crate::uvm::bridge::flight().filter(|_| !g.ragdoll) {
+            // Pawn.DoJump for birds: DoBirdFlap (Velocity.Z = mFlapZ and a forward push that fades
+            // as the 2D speed nears 1.2 x AirSpeed), at most every mAirFlapCooldown seconds
+            let now = time.elapsed_secs();
+            if now - g.flap_time > f.flap_cooldown {
+                g.flap_time = now;
+                let fwd = Quat::from_rotation_y(g.yaw) * -Vec3::Z;
+                let speed2d = Vec2::new(g.velocity.x, g.velocity.z).length() / S;
+                let push = f.flap_z * (1.0 - (speed2d / (f.air_speed * 1.2).max(1.0)).clamp(0.0, 1.0));
+                g.velocity.y = uu(f.flap_z);
+                g.velocity += fwd * uu(push);
+                g.ready_to_wall_run = true;
+                sounds.play("jump", None);
+            }
         } else if g.double_jump_ready && g.multi_jump_remaining > 0 && g.velocity.y.abs() < uu(tune::DOUBLE_JUMP_THRESHOLD) {
             sounds.play("jump", None);
             let mv = crate::uvm::bridge::movement();
@@ -585,7 +633,25 @@ pub fn goat_move(
         }
     } else if !wall_gravity {
         // GravityVolume.GravityZ replaces the world's gravity inside it
-        g.velocity.y += g.env.gravity_y.unwrap_or(phys.world.gravity.y) * dt;
+        let gravity = g.env.gravity_y.unwrap_or(phys.world.gravity.y);
+        g.velocity.y += gravity * dt;
+        // gliding (Pawn flight; the native code isn't ported 1:1): lift from mAirLiftCoefficient
+        // at the angle of attack (the level body against the oncoming air), drag from
+        // mAirDragCoefficient at that lift, both growing with speed squared and scaled so a bird
+        // at AirSpeed with lift 1 holds its height
+        if let (Some(f), false, false) = (crate::uvm::bridge::flight(), g.grounded, g.ragdoll) {
+            let v = g.velocity;
+            let v2d = Vec2::new(v.x, v.z).length();
+            let aoa = (-v.y).atan2(v2d.max(1e-3)).to_degrees();
+            let lift_c = crate::uvm::bridge::eval_curve(&f.lift, aoa);
+            let drag_c = crate::uvm::bridge::eval_curve(&f.drag, lift_c);
+            let k = gravity.abs() / uu(f.air_speed.max(1.0)).powi(2);
+            g.velocity.y += lift_c * (f.speed_lift * 0.5) * k * v2d * v2d * dt;
+            let speed = v.length();
+            if speed > 1e-3 {
+                g.velocity -= v / speed * (drag_c * k * speed * speed * dt).min(speed);
+            }
+        }
     }
     let impact_velocity = g.velocity;
 

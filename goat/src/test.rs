@@ -1,5 +1,6 @@
 //! Scripted test runs: `goat --test smoke --shot out/smoke.png`.
-//! Runs on the second monitor with no mouse capture, prints a log and exits with a status code.
+//! Runs on the main monitor (`--second-monitor` for the other) with no mouse capture, prints a log
+//! and exits with a status code.
 //! Aborts early (about 4 s off script) with a clear reason.
 
 use crate::goat::{Goat, ScriptedInput};
@@ -30,7 +31,7 @@ fn pulse(t: f32, dt: f32, at: f32) -> bool {
 pub fn add(app: &mut App) {
     app.add_systems(First, cpu_frame_start).add_systems(Last, cpu_frame_end);
     app.insert_resource(ScriptedInput::default())
-        .add_systems(Update, (place_window, (drive, headbutt_scenario, npc_scenario, crate::test_tricks::tricks_scenario, crate::test_npc::npc_reactions_scenario, crate::test_mods::mods_scenario, crate::test_mutators::mutators_scenario, crate::test_mutators::moonjump_scenario, crate::test_mutators::forcepush_scenario, crate::test_mutators::jetpack_scenario, crate::test_mutators::inventory_scenario, crate::test_mutators::kismet_scenario, crate::test_mutators::resize_scenario, crate::test_menus::pausemenu_scenario, crate::test_menu_flow::menuflow_scenario, crate::test_menus::hud_scenario).chain().before(crate::goat::read_input)))
+        .add_systems(Update, (place_window, (drive, headbutt_scenario, npc_scenario, crate::test_tricks::tricks_scenario, crate::test_npc::npc_reactions_scenario, crate::test_mods::mods_scenario, crate::test_mutators::mutators_scenario, crate::test_mutators::moonjump_scenario, crate::test_mutators::forcepush_scenario, crate::test_mutators::jetpack_scenario, crate::test_mutators::inventory_scenario, crate::test_mutators::kismet_scenario, crate::test_mutators::resize_scenario, crate::test_menus::pausemenu_scenario, crate::test_menu_flow::menuflow_scenario, crate::test_menus::hud_scenario, crate::test_pad::pad_scenario, crate::test_fly::fly_scenario).chain().before(crate::goat::read_input)))
             .add_systems(Update, (crate::test_destruct::destruct_scenario, crate::test_quests::quests_scenario, crate::test_quests::music_scenario, crate::test_menu_flow::mainmenu_scenario, crate::test_destruct::ladder_scenario, crate::test_destruct::water_scenario, crate::test_destruct::baseball_scenario, crate::test_destruct::race_scenario, crate::test_destruct::racepopup_scenario).after(crate::test_menus::hud_scenario).before(crate::goat::read_input));
 }
 
@@ -198,7 +199,8 @@ fn headbutt_scenario(
     }
 }
 
-/// Put the (initially hidden) test window on a non-primary monitor, then show it.
+/// Put the (initially hidden) test window on the main monitor (or the other one with
+/// `--second-monitor`), then show it.
 fn place_window(
     args: Res<Args>,
     mut done: Local<u32>,
@@ -362,7 +364,7 @@ fn drive(
         "headbutt" => {
             end = 3.4;
         }
-        "flip" | "wallrun" | "jumpover" | "reactions" | "attack" | "route" | "trip" | "mods" | "mutators" | "moonjump" | "forcepush" | "jetpack" | "inventory" | "kismet" | "resize" | "fx" | "npcvm" | "matinee" | "pausemenu" | "menuflow" | "hud" | "apex" | "explode" | "quests" | "music" | "mainmenu" | "ladder" | "manual" | "bike" | "longboard" | "cart" | "water" | "baseball" | "race" | "racepopup" | "bikerace" => {
+        "flip" | "wallrun" | "jumpover" | "reactions" | "attack" | "route" | "trip" | "mods" | "mutators" | "moonjump" | "forcepush" | "jetpack" | "inventory" | "kismet" | "resize" | "fx" | "npcvm" | "matinee" | "pausemenu" | "menuflow" | "hud" | "apex" | "explode" | "quests" | "music" | "mainmenu" | "ladder" | "manual" | "bike" | "longboard" | "cart" | "water" | "baseball" | "race" | "racepopup" | "bikerace" | "pad" | "fly" => {
             // driven by test_tricks; keep this harness alive
             s.shot_done = true;
             end = 60.0;

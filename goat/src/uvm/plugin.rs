@@ -74,6 +74,7 @@ fn wanted(menu: &crate::mods::ModMenu, args: &crate::Args) -> Vec<String> {
         Some("inventory") => Some("gm-GoatGame.GGMutatorInventory".to_string()),
         Some("music") => Some("gm-GoatGame.GGMutatorGoatMau5".to_string()),
         Some("kismet") => Some(String::new()),
+        Some("fly") => Some(crate::test_fly::FLY_ITEMS.to_string()),
         Some("resize") => Some("246864068".to_string()),
         _ => None,
     });
@@ -247,6 +248,7 @@ fn tick_mutators(
     actors: Res<super::actors::ScriptActors>,
     mut commands: Commands,
     scroll: Res<bevy::input::mouse::AccumulatedMouseScroll>,
+    pads: Query<&bevy::input::gamepad::Gamepad>,
 ) {
     let _prof_scope = crate::prof::scope("plugin::tick_mutators");
     let dt = time.delta_secs();
@@ -375,6 +377,10 @@ fn tick_mutators(
             if mouse.pressed(b) {
                 held.push(n.into());
             }
+        }
+        // the pad's buttons by the names DefaultInput.ini binds (XboxTypeS_A -> GBA_Jump...)
+        if let Some(p) = crate::pad::active(&pads) {
+            held.extend(crate::pad::UE_BUTTONS.iter().filter(|(b, _)| p.pressed(*b)).map(|(_, n)| n.to_string()));
         }
     }
     // Trace/FastTrace see the physics world during this call only
