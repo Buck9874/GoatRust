@@ -162,7 +162,10 @@ pub fn npc_reactions_scenario(
         ("attack", 0) if t > 0.5 => {
             let pick = npcs
                 .iter()
-                .filter(|(_, n, _, _)| n.protect.is_some())
+                // people (GGAIControllerPassiveGoat never attacks) who stand guard (no route)
+                .filter(|(_, n, nt, nm)| {
+                    n.protect.is_some_and(|p| nt.translation.distance(p.item) <= p.radius) && n.route.is_none() && !nm.as_str().starts_with("GGNpcGoat")
+                })
                 .min_by(|a, b| a.1.protect.unwrap().item.distance_squared(here).total_cmp(&b.1.protect.unwrap().item.distance_squared(here)));
             let Some((e, n, nt, nm)) = pick else { fail(&name, "no guards on this map (use Level_02)", t) };
             let item = n.protect.unwrap().item;
@@ -183,7 +186,7 @@ pub fn npc_reactions_scenario(
             if matches!(n.state, NpcState::Attack | NpcState::Angry) {
                 snap(&mut st);
             }
-            if n.state == NpcState::Angry || g.ragdoll {
+            if n.state == NpcState::Angry || (g.ragdoll && n.state == NpcState::Attack) {
                 println!("  t={t:.2} guard {:?}, goat speed {:.1} m/s, ragdoll {}", n.state, g.velocity.length(), g.ragdoll);
                 println!("TEST attack PASS");
                 st.phase = 8;

@@ -162,6 +162,10 @@ pub struct ScriptDrive {
     pub anim: Option<(String, f32, bool)>,
     pub anim_serial: u32,
     played: u32,
+    /// GGNpc.StandUp succeeded in script: end the ragdoll.
+    pub stand_up: bool,
+    /// Set on fire: the controller should Panic (GGNpc.OnSetOnFire).
+    pub panic: bool,
 }
 
 impl Npc {
@@ -575,8 +579,11 @@ pub fn update(
         // a script controller decides; walk, turn and animate as it says
         if let Some(sd) = n.script.as_mut() {
             if n.state == NpcState::Ragdoll {
+                // the controller's StandUp timer decides (GGAIController.StandUp -> GGNpc.StandUp);
+                // n.timer only keeps drowning people down
                 n.timer -= dt;
-                if n.timer <= 0.0 && ragdolled {
+                if sd.stand_up && n.timer <= 0.0 && ragdolled {
+                    sd.stand_up = false;
                     commands.entity(e).insert(StopRagdoll);
                     n.state = NpcState::Idle;
                 }

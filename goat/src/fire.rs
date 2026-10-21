@@ -93,7 +93,9 @@ fn ignite(
         commands.entity(e).insert(Burning { left, fx, sound });
         // GGNpc.OnSetOnFire: panic while burning
         if let Ok(mut n) = npcs.get_mut(e) {
-            if n.state != NpcState::Ragdoll {
+            if let Some(sd) = n.script.as_mut() {
+                sd.panic = true;
+            } else if n.state != NpcState::Ragdoll {
                 n.state = NpcState::Panic;
                 n.timer = left;
             }

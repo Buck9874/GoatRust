@@ -348,7 +348,8 @@ GoatVanilla mutators, so DLC-dependent Workshop mods link too (all 6346 of its s
   systems. `goat --test fx` spawns Jet Pack thrust, fire and fireworks next to the goat (each must
   have live particles); `--test jetpack` now also checks the two thrust plumes play. GOAT_NO_FX=1
   skips map emitters.
-- NPC behaviour through the VM (`uvm/npcs.rs`, opt-in: GOAT_NPC_VM=1, forced by `--test npcvm`):
+- NPC behaviour through the VM (`uvm/npcs.rs`, the default since 2026-10-20; GOAT_NPC_VM=0 brings
+  back the Rust AI in npc.rs):
   every NPC's proxy pawn is possessed by its real ControllerClass (GGAIController, Agressive,
   GangMember, PassiveGoat or a mod's) with PreBeginPlay/PostBeginPlay/Possess. Its Tick, timers and
   state code run in the VM; the game feeds SeePlayer(goat) every 0.5 s when in sight (clear line,
@@ -364,7 +365,22 @@ GoatVanilla mutators, so DLC-dependent Workshop mods link too (all 6346 of its s
   0 for all scripts). `goat --test npcvm`: 92 NPCs possessed, all 5 route NPCs walk their routes
   through FollowRoute state code, an aggressive NPC enters ChaseGoat, and the idle NPC the goat is
   put in front of sees it and reacts (gestures). Cost: < 2 ms per frame for 92 controllers, 26 ms
-  once when possessing. The default stays the Rust AI (npc.rs) until the VM path matches it.
+  once when possessing.
+  Made the default (2026-10-20): a knock-down sets the pawn's mIsRagdoll/mViolatedByGoat/
+  mTimesKnockedByGoat and goes to every controller's OnRagdoll; the controller's StandUp timer
+  calls GGNpc.StandUp, native-overridden (uvmStandUp tells npc.rs to end the ragdoll), then
+  DeterminWhatToDoAfterStandup runs as in the game (people run back to their spot: StopPanic;
+  bystanders of a violated NPC panic). The controller's state and timers are mirrored into
+  Npc.state/reason/intervals (StartPanic -> Panic, StopPanic -> Return, ProtectItem + AttackPawn
+  timer -> Attack, pointing/look-at timers -> Look/Applaud...) for the rest of the game and the
+  tests. Fire sets mIsBurning and calls the controller's Panic. VM fixes found on the way:
+  RegisterDesiredEvents now fills every mOnX list the game class declares (controllers never got
+  OnTrickMade), trick objects get mOwner (a GGTrickManager with mGoatController) so OnTrickMade
+  finds the trickster, and arrays of enum bytes load from their stored FNames (8 bytes each; e.g.
+  mApplaudGoatTricks loaded as garbage). In the original a GGNpcGoat (GGAIControllerPassiveGoat)
+  never protects or attacks; `--test attack` now picks a person standing within its guard radius.
+  Cost: script_npcs stays under 2 ms a frame (26 ms once when possessing); the main update is
+  about 1 ms more than with the Rust AI.
 - Matinee (`upk/src/matinee.rs`, `uvm/matinee.rs`): SeqAct_Interp reads its InterpData (the "Data"
   variable link; groups -> InterpTrackMove PosTrack/EulerTrack, or the InterpTrackMoveAxis
   SubTracks; InterpTrackEvent keys) and binds each group to the actors on the variable link named
@@ -760,11 +776,12 @@ beams, ribbons), post-processing, local leaderboards. DLCs dropped (see their se
 - Performance with the PC idle: 6.7 ms main update in town (tick_mutators 1.6, scaleform 1.4).
 - Test windows open on the main monitor (`--second-monitor` for the other).
 
-1. NPC AI through the VM by default (GOAT_NPC_VM=1): today npcvm, route and trip pass with it,
-   but npc (a knocked-down NPC doesn't stand up and panic: GGNpc.StandUp Accessed None, no
-   Actor.MoveSmooth), reactions (the goat isn't noticed) and attack (the guard never kicks) fail.
-2. Split-screen co-op (4 local players).
-3. Fan specials; race leaderboards have no online stats (local only).
+- **NPC AI from the game's scripts is the default** (2026-10-20, see the NPC entry above):
+  npc, reactions, attack, route, trip, npcvm, wallrun, water, quests, explode, kismet, mutators,
+  race, manual, baseball, view and fx pass. Main update 7.8 ms in town (6.7 with GOAT_NPC_VM=0).
+
+1. Split-screen co-op (4 local players).
+2. Fan specials; race leaderboards have no online stats (local only).
 
 ## Menus: Scaleform GFx through Ruffle
 

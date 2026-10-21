@@ -1,4 +1,4 @@
-"""GoatRust progress board: a sunburst of every planned piece of the base game (and the DLC maps),
+"""GoatRust progress board: a sunburst of every planned piece of the base game,
 in the style of a project board. Writes out/promo/progress.html; render it to PNG with a
 headless browser. Status: 2 = done, 1 = partly done, 0 = open."""
 import html, math, os
@@ -21,6 +21,7 @@ BOARD = {
         ("Walk / sprint / jumps", D), ("Ragdoll + stand up", D), ("Headbutt / kick", D),
         ("Lick / grab", D), ("Wall run + wall jump", D), ("Ladders", D), ("Air flips + spins", D),
         ("Perfect landing", D), ("The manual", D), ("Orbit camera", D), ("Inventory (I)", D),
+        ("Controller", D), ("Flying (bird mutators)", D),
     ],
     "World": [
         ("Props + KActors", D), ("Collision chains", D), ("Breakables", D), ("Explosives + wrecks", D),
@@ -30,7 +31,7 @@ BOARD = {
     ],
     "People": [
         ("Routes + idles", D), ("Notice / applaud / angry", D), ("Knock down + ragdoll", D),
-        ("Panic + flee", D), ("Attack the goat", D), ("Drowning", D), ("Script-driven NPCs", D),
+        ("Panic + flee", D), ("Attack the goat", D), ("Drowning", D), ("Game AI scripts as the default", D),
         ("Race goat rider", D),
     ],
     "Score + progress": [
@@ -46,10 +47,7 @@ BOARD = {
         ("Main menu", D), ("Custom game + mutators", D), ("Options (saved)", D), ("Key bindings", D),
         ("Pause menu", D), ("Credits", D), ("Workshop views", D), ("News panel (offline)", D),
     ],
-    "Maps": [
-        ("Goatville", D), ("Goat City Bay", D), ("Goat MMO Simulator", O), ("GoatZ", O),
-        ("Goat in Space", O), ("Payday", O),
-    ],
+    "Maps + extras": [("Goatville", D), ("Goat City Bay", D), ("Split-screen co-op", O), ("Online leaderboards", O)],
 }
 
 COL = {D: "#4a86e8", P: "#c9902a", O: "#3a3a3a"}
@@ -59,7 +57,7 @@ done = sum(1 for i in items if i[2] == D)
 part = sum(1 for i in items if i[2] == P)
 open_ = n - done - part
 pct = (done + 0.5 * part) / n * 100
-base = [i for i in items if i[0] != "Maps" or i[1] in ("Goatville", "Goat City Bay")]
+base = [i for i in items if i[1] not in ("Split-screen co-op", "Online leaderboards")]
 base_pct = (sum(1 for i in base if i[2] == D) + 0.5 * sum(1 for i in base if i[2] == P)) / len(base) * 100
 
 def arc(cx, cy, r0, r1, a0, a1):
@@ -106,7 +104,7 @@ for sec, lst in BOARD.items():
     sd = sum(1 for x in lst if x[1] == D)
     sp = sum(1 for x in lst if x[1] == P)
     f = (sd + 0.5 * sp) / k * 100
-    rows.append(f'<div class="row"><span class="sec">{html.escape(sec)}</span><div class="bar"><div style="width:{f:.0f}%"></div></div><span class="num">{sd + sp}/{k}</span></div>')
+    rows.append(f'<div class="row"><span class="sec">{html.escape(sec)}</span><div class="bar"><div style="width:{f:.0f}%"></div></div><span class="num">{sd}/{k}</span></div>')
 
 page = f"""<!doctype html><html><head><meta charset="utf-8"><title>GoatRust progress</title>
 <style>
@@ -126,14 +124,14 @@ h1{{margin:0 0 4px;font-size:26px}} .sub{{color:#a8a8a8;margin-bottom:16px;font-
 .num{{width:44px;text-align:right;color:#bdbdbd}}
 </style></head><body>
 <h1>Goat Simulator Rust rebuild: how far along</h1>
-<div class="sub">Board as of 19 Oct 2026. Runs on the original game files from your own Steam copy; nothing from the game is shipped.</div>
+<div class="sub">Board as of 20 Oct 2026. The DLC maps are dropped. Runs on the original game files from your own Steam copy; nothing from the game is shipped.</div>
 <div class="cards">
  <div class="card"><div class="t">Base game rebuilt (planned items)</div><div class="v">{base_pct:.1f}%</div>
   <div class="d">Goatville + Goat City Bay and everything they use: {sum(1 for i in base if i[2] == D)} of {len(base)} items done. Partly done items count half.</div><div class="pbar"><div style="width:{base_pct:.1f}%"></div></div></div>
- <div class="card"><div class="t">Scripted gameplay tests</div><div class="v">30</div>
+ <div class="card"><div class="t">Scripted gameplay tests</div><div class="v">40</div>
   <div class="d">Automated runs that play the game (ride a bike, drive the shopping cart, use the inventory, run a race, break the greenhouse, finish the main menu...) and fail on anything off script.</div><div class="pbar"><div style="width:100%"></div></div></div>
- <div class="card"><div class="t">Maps playable</div><div class="v">2 of 6</div>
-  <div class="d">Both base-game maps play with their quests, music and Kismet. The four DLC maps are next.</div><div class="pbar"><div style="width:33.3%"></div></div></div>
+ <div class="card" style="border-color:#c9902a"><div class="t">Just finished / up next</div><div class="v" style="font-size:22px;color:#e0a83a">NPCs on the game's own AI</div>
+  <div class="d">People now run on the original AI scripts in the VM: they notice and applaud the goat, get up after a knock-down and run back, and guards kick the goat off their stuff. Up next: split-screen co-op, then online leaderboards.</div><div class="pbar"><div style="width:100%;background:#c9902a"></div></div></div>
 </div>
 <div class="note">The board lists the game's features I've written down to rebuild, not lines of code: items differ a lot in size, so it says how much of the plan is done rather than an exact share of the game.</div>
 <div class="panel">

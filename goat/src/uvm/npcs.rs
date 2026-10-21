@@ -1,9 +1,10 @@
-//! NPC behaviour through the VM (GOAT_NPC_VM=1): each NPC's script pawn (its proxy) gets its
+//! NPC behaviour through the VM (the default; GOAT_NPC_VM=0 uses npc.rs's own AI): each NPC's script pawn (its proxy) gets its
 //! real AI controller (Default ControllerClass: GGAIController, ...Agressive, ...GangMember,
 //! ...PassiveGoat, or a mod's own). The controller's Tick, timers and state code run in the VM;
 //! sight (SeePlayer) and ragdolls (OnRagdoll) are fed in from the game, and its latent moves
 //! (MoveTo/MoveToward), rotation and SetAnimationInfoStruct animations drive the NPC through
-//! npc::ScriptDrive. Knock-downs, ragdolls and scoring stay with npc.rs.
+//! npc::ScriptDrive. Knock-downs, ragdolls and scoring stay with npc.rs; the controller's
+//! StandUp timer decides when a ragdoll ends, and its state is mirrored into Npc.state.
 
 use super::plugin::Mutators;
 use super::value::Value;
@@ -15,7 +16,74 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 pub fn enabled() -> bool {
-    forced() || std::env::var("GOAT_NPC_VM").is_ok_and(|v| v != "0")
+    forced() || !std::env::var("GOAT_NPC_VM").is_ok_and(|v| v == "0")
+}
+
+/// GGNpc.StandUp, natively: the ragdoll itself is npc.rs's, so stand up (uvmStandUp tells the
+/// host) and clear the flags the script clears.
+pub fn stand_up(vm: &mut Vm, c: &mut super::exec::Call) -> Value {
+    let Some(p) = c.this else { return Value::Bool(false) };
+    if !vm.get(p, "mIsRagdoll").truthy() {
+        return Value::Bool(false);
+    }
+    vm.set(p, "mViolatedByGoat", Value::Bool(false));
+    vm.set(p, "mIsRagdoll", Value::Bool(false));
+    vm.set(p, "uvmStandUp", Value::Bool(true));
+    Value::Bool(true)
+}
+
+/// Controller state -> Npc.state/reason/intervals, so the rest of the game (and the tests) see
+/// what the script is doing.
+fn mirror(vm: &mut Vm, ctrl: ObjId, n: &mut Npc, now: f32) {
+    let vm_now = match vm.globals.get("worldinfo").copied() {
+        Some(wi) => vm.get(wi, "TimeSeconds").float(),
+        None => 0.0,
+    };
+    let interval = |vm: &mut Vm, name: &str| -> (f32, f32) {
+        let v = vm.get(ctrl, name);
+        let Value::Struct(s) = &v else { return (0.0, 0.0) };
+        let (yl, yc) = (vm.sym("LastTimeStamp"), vm.sym("CurrentInterval"));
+        (s.field(yl).map(|v| v.float()).unwrap_or(0.0), s.field(yc).map(|v| v.float()).unwrap_or(0.0))
+    };
+    let mut copy = |vm: &mut Vm, name: &str, iv: &mut crate::npc::Interval| -> f32 {
+        let (last, cur) = interval(vm, name);
+        iv.current = cur;
+        iv.last = if last == 0.0 { 0.0 } else { (now - (vm_now - last)).max(1e-3) };
+        if last == 0.0 { f32::INFINITY } else { vm_now - last }
+    };
+    let since_notice = copy(vm, "mNoticeGoatIntervalInfo", &mut n.notice);
+    let since_applaud = copy(vm, "mApplaudGoatIntervalInfo", &mut n.applaud);
+    copy(vm, "mInteractionIntervalInfo", &mut n.interaction);
+    let since_attack = copy(vm, "mAttackIntervalInfo", &mut n.attack);
+    n.seen_goat = vm.get(ctrl, "mLastSeenGoat").obj().is_some();
+    let timer = |vm: &mut Vm, f: &str| {
+        let y = vm.sym(f);
+        vm.timers.iter().any(|t| t.obj == ctrl && t.func == y)
+    };
+    let state = vm.obj(ctrl).state.map(|y| vm.name_of(y).to_ascii_lowercase()).unwrap_or_default();
+    n.state = match state.as_str() {
+        "startpanic" => NpcState::Panic,
+        "stoppanic" | "waitingforlanding" => NpcState::Return,
+        "followroute" => NpcState::FollowRoute,
+        "interacting" => NpcState::Interact,
+        "dancing" => NpcState::Applaud,
+        "protectitem" if timer(vm, "AttackPawn") => NpcState::Attack,
+        "protectitem" if since_attack < 3.0 && timer(vm, "DelayedGoToProtect") => NpcState::Angry,
+        "protectitem" => NpcState::Protect,
+        _ => {
+            let pointing = timer(vm, "StopPointing");
+            let busy = pointing || timer(vm, "StopLookAt") || timer(vm, "ResumeDefaultAction");
+            if !busy {
+                NpcState::Idle
+            } else if since_applaud <= since_notice && since_applaud < 6.0 {
+                n.reason = "applaud";
+                if pointing { NpcState::Look } else { NpcState::Applaud }
+            } else {
+                n.reason = "notice";
+                NpcState::Look
+            }
+        }
+    };
 }
 
 struct Driven {
@@ -169,6 +237,13 @@ pub fn script_npcs(
         let ragdoll = n.state == NpcState::Ragdoll;
         if ragdoll != d.ragdoll {
             d.ragdoll = ragdoll;
+            if ragdoll {
+                // GGNpc.KnockedByGoat (the bystanders' OnRagdoll panics over a violated NPC)
+                let k = vm.get(d.pawn, "mTimesKnockedByGoat").int() + 1;
+                vm.set(d.pawn, "mTimesKnockedByGoat", Value::Int(k));
+                vm.set(d.pawn, "mViolatedByGoat", Value::Bool(true));
+                vm.set(d.pawn, "mIsRagdoll", Value::Bool(true));
+            }
             ragdoll_events.push((d.pawn, ragdoll));
         }
         let yaw = yaw_to_ue(n.yaw);
@@ -213,9 +288,22 @@ pub fn script_npcs(
             }
         }
     }
-    // script -> game: moves, rotation, animations
+    // script -> game: moves, rotation, animations, stand-ups, state
+    let now = time.elapsed_secs();
     for (e, mut n, _, _) in &mut npcs {
         let Some(d) = st.driven.get_mut(&e) else { continue };
+        if n.script.as_ref().is_some_and(|s| s.panic) {
+            // GGNpc.OnSetOnFire -> the controller panics
+            vm.set(d.pawn, "mIsBurning", Value::Bool(true));
+            vm.call_named(d.ctrl, "Panic", vec![]);
+        }
+        let stand = vm.get(d.pawn, "uvmStandUp").truthy();
+        if stand {
+            vm.set(d.pawn, "uvmStandUp", Value::Bool(false));
+        }
+        if n.state != NpcState::Ragdoll {
+            mirror(vm, d.ctrl, &mut n, now);
+        }
         let goal = vm.move_goal(d.ctrl);
         let pawn = d.pawn;
         let speed = match vm.get(pawn, "GroundSpeed") {
@@ -232,6 +320,8 @@ pub fn script_npcs(
         };
         let serial = vm.get(pawn, "uvmAnimSerial").int() as u32;
         let Some(sd) = n.script.as_mut() else { continue };
+        sd.panic = false;
+        sd.stand_up |= stand;
         sd.goal = goal.map(|(g, _)| convert::pos(g));
         sd.speed = if walk { speed.min(150.0) } else { speed } * convert::S;
         if script_turned {

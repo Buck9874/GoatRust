@@ -35,13 +35,15 @@ pub fn add(app: &mut App) {
             .add_systems(Update, (crate::test_destruct::destruct_scenario, crate::test_quests::quests_scenario, crate::test_quests::music_scenario, crate::test_menu_flow::mainmenu_scenario, crate::test_destruct::ladder_scenario, crate::test_destruct::water_scenario, crate::test_destruct::baseball_scenario, crate::test_destruct::race_scenario, crate::test_destruct::racepopup_scenario).after(crate::test_menus::hud_scenario).before(crate::goat::read_input));
 }
 
-/// "npc": headbutt the nearest person, expect ragdoll, then stand-up + panic after mStandUpDelay.
+/// "npc": headbutt the nearest person, expect ragdoll, then stand-up + run after mStandUpDelay
+/// (the script AI runs back to its spot: StandUp -> ReturnToOriginalPosition -> StopPanic; the
+/// Rust AI, GOAT_NPC_VM=0, panics).
 #[allow(clippy::type_complexity)]
 fn npc_scenario(
     args: Res<Args>,
     time: Res<Time>,
     mut commands: Commands,
-    mut st: Local<(f32, u32, Option<Entity>, f32, bool)>,
+    mut st: Local<(f32, u32, Option<Entity>, f32, bool, bool)>,
     mut phys: ResMut<crate::physics::Physics>,
     mut input: ResMut<ScriptedInput>,
     mut goats: Query<(&mut Goat, &mut Transform), Without<crate::npc::Npc>>,
@@ -105,9 +107,14 @@ fn npc_scenario(
         println!("TEST npc FAIL: NPC ragdoll exploded");
         std::process::exit(10);
     }
+    // stood up and ran (panic, or back to its spot) at some point after the knock-down
+    if t > 2.5 && matches!(n.state, crate::npc::NpcState::Panic | crate::npc::NpcState::Return) && !st.5 {
+        st.5 = true;
+        println!("npc ran after standing up: {:?} at t={t:.1}", n.state);
+    }
     if pulse(t, dt, 10.5) {
         println!("npc state after stand-up delay: {:?} at {:?}", n.state, nt.translation);
-        if n.state != crate::npc::NpcState::Panic {
+        if n.state == crate::npc::NpcState::Ragdoll || !st.5 {
             println!("TEST npc FAIL: NPC did not stand up and panic");
             std::process::exit(10);
         }

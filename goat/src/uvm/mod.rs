@@ -334,6 +334,7 @@ impl Vm {
         settings::register(&mut vm);
         menu_actions::register(&mut vm);
         vm.overrides.insert("ggnpc.setanimationinfostruct".into(), npcs::set_animation_info);
+        vm.overrides.insert("ggnpc.standup".into(), npcs::stand_up);
         vm.natives.insert("ggaicontrollerbase.shouldcheckvisibility".into(), npcs::should_check_visibility);
         vm
     }
@@ -1002,6 +1003,16 @@ impl Vm {
     fn decode_array(&mut self, pkg: usize, inner: &Ty, n: i32, raw: &[u8]) -> Vec<Value> {
         let mut r = upk::reader::Reader::new(raw);
         let mut out = vec![];
+        // an array of enum bytes is serialized as the enum value names (FName, 8 bytes each)
+        if let (Ty::Byte(Some(e)), true) = (inner, n > 0 && raw.len() == n as usize * 8) {
+            for _ in 0..n {
+                let (Ok(i), Ok(num)) = (r.i32(), r.i32()) else { break };
+                let s = self.reg.packages[pkg].name_str(upk::package::FName { index: i, number: num });
+                let idx = self.enums[*e].names.iter().position(|x| x.eq_ignore_ascii_case(&s)).unwrap_or(if s == "None" { 255 } else { 0 });
+                out.push(Value::Byte(idx as u8));
+            }
+            return out;
+        }
         for _ in 0..n.max(0) {
             let v = (|| -> anyhow::Result<Value> {
                 Ok(match inner {

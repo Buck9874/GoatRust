@@ -157,6 +157,12 @@ impl Host {
             }
             GameEvent::TrickMade(class) => {
                 let t = self.vm.class_by_name(class).map(|c| self.vm.spawn_object(c, None));
+                // trickMade.mOwner.mGoatController.Pawn is the trickster (GGAIController.OnTrickMade)
+                if let (Some(t), Some(tm)) = (t, self.helper_object("GGTrickManager")) {
+                    let pc = self.vm.get(g, "Controller");
+                    self.vm.set(tm, "mGoatController", pc);
+                    self.vm.set(t, "mOwner", Value::Obj(Some(tm)));
+                }
                 ("OnTrickMade", vec![Value::Obj(t)])
             }
             GameEvent::Manual(doing, ok) => ("OnManual", vec![goat, Value::Bool(*doing), Value::Bool(*ok)]),
@@ -200,7 +206,19 @@ impl Host {
 /// implements with a body (NotifyOnPossess/NotifyOnUnpossess -> mOnPossess/mOnUnpossess).
 pub fn register_desired_events(vm: &mut Vm, game: ObjId, listener: ObjId, add: bool) {
     let class = vm.obj(listener).class;
-    let lists: Vec<(String, String)> = vm.obj(game).props.keys().map(|&k| vm.name_of(k).to_string()).filter(|n| n.starts_with("mOn")).map(|n| {
+    // every mOnX array the game class declares (not only the ones already written)
+    let mut names: Vec<String> = vec![];
+    let mut c = Some(vm.obj(game).class);
+    while let Some(k) = c.filter(|&k| k != super::NONE_CLASS) {
+        for p in &vm.classes[k].props {
+            let n = vm.name_of(p.name);
+            if n.starts_with("mOn") && matches!(p.ty, super::Ty::Array(_)) && !names.iter().any(|x| x == n) {
+                names.push(n.to_string());
+            }
+        }
+        c = vm.classes[k].super_;
+    }
+    let lists: Vec<(String, String)> = names.into_iter().map(|n| {
         let func = match n.as_str() {
             "mOnPossess" => "NotifyOnPossess".to_string(),
             "mOnUnpossess" => "NotifyOnUnpossess".to_string(),
@@ -213,14 +231,16 @@ pub fn register_desired_events(vm: &mut Vm, game: ObjId, listener: ObjId, add: b
         if vm.defines(class, &func).is_none() {
             continue;
         }
-        let y = vm.sym(&list);
-        if let Some(Value::Array(a)) = vm.obj_mut(game).props.get_mut(&y) {
-            let v = Value::Obj(Some(listener));
-            a.retain(|x| *x != v);
-            if add {
-                a.push(v);
-            }
+        let mut a = match vm.get(game, &list) {
+            Value::Array(a) => a,
+            _ => Default::default(),
+        };
+        let v = Value::Obj(Some(listener));
+        a.retain(|x| *x != v);
+        if add {
+            a.push(v);
         }
+        vm.set(game, &list, Value::Array(a));
         joined.push(func);
     }
     if add && !joined.is_empty() {
