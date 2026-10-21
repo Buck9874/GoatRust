@@ -1,0 +1,530 @@
+diff --git a/core/src/avm2/function.rs b/core/src/avm2/function.rs
+index f6a511ef..fee701e3 100644
+--- a/core/src/avm2/function.rs
++++ b/core/src/avm2/function.rs
+@@ -82,6 +82,11 @@ impl<'gc> BoundMethod<'gc> {
+         )
+     }
+ 
++    /// GoatRust patch (gfx_bridge): the scope the function was created in.
++    pub fn scope(&self) -> ScopeChain<'gc> {
++        self.scope
++    }
++
+     pub fn as_method(&self) -> Method<'gc> {
+         self.method
+     }
+diff --git a/core/src/avm2/globals/flash/display/movie_clip.rs b/core/src/avm2/globals/flash/display/movie_clip.rs
+index 7e592674..7fbe4ea1 100644
+--- a/core/src/avm2/globals/flash/display/movie_clip.rs
++++ b/core/src/avm2/globals/flash/display/movie_clip.rs
+@@ -435,6 +435,12 @@ pub fn goto_frame<'gc>(
+                 if activation.caller_movie_or_root().version() >= 11 {
+                     if let Some(frame) = frame {
+                         frame as i32
++                    } else if crate::gfx_bridge::host_calls_enabled() {
++                        // GoatRust patch: Scaleform only warns about a missing frame label and
++                        // leaves the clip where it is (CLIK widgets in Goat Simulator's menus
++                        // ask for labels some of their skins lack, e.g. MenuValueSlider "default")
++                        tracing::warn!("gotoAnd*: frame label {frame_or_label} not found (Scaleform: ignored)");
++                        return Ok(());
+                     } else {
+                         return Err(make_error_2109(
+                             activation,
+diff --git a/core/src/avm2/globals/flash/external/external_interface.rs b/core/src/avm2/globals/flash/external/external_interface.rs
+index d638a76f..f1346f24 100644
+--- a/core/src/avm2/globals/flash/external/external_interface.rs
++++ b/core/src/avm2/globals/flash/external/external_interface.rs
+@@ -11,6 +11,10 @@ pub fn call<'gc>(
+     args: FunctionArgs<'_, 'gc>,
+ ) -> Result<Value<'gc>, Error<'gc>> {
+     let name = args.get_string(activation, 0);
++    // GoatRust patch: Scaleform-style ExternalInterface calls into the host (gfx_bridge)
++    if crate::gfx_bridge::host_calls_enabled() {
++        return Ok(crate::gfx_bridge::external_call(activation, name.to_string(), args));
++    }
+     check_available(activation)?;
+ 
+     let external_args = args
+@@ -37,7 +41,7 @@ pub fn get_available<'gc>(
+     _this: Value<'gc>,
+     _args: FunctionArgs<'_, 'gc>,
+ ) -> Result<Value<'gc>, Error<'gc>> {
+-    Ok(activation.context.external_interface.available().into())
++    Ok((activation.context.external_interface.available() || crate::gfx_bridge::host_calls_enabled()).into())
+ }
+ 
+ pub fn add_callback<'gc>(
+diff --git a/core/src/avm2/globals/flash/utils.rs b/core/src/avm2/globals/flash/utils.rs
+index bcbc1e73..5cd5d263 100644
+--- a/core/src/avm2/globals/flash/utils.rs
++++ b/core/src/avm2/globals/flash/utils.rs
+@@ -207,7 +207,33 @@ pub fn get_definition_by_name<'gc>(
+     let name = args.try_get_string(0);
+ 
+     if let Some(name) = name {
+-        appdomain.get_defined_value_handling_vector(activation, name)
++        match appdomain.get_defined_value_handling_vector(activation, name) {
++            Ok(v) => Ok(v),
++            // GoatRust patch: Scaleform resolves names more leniently than Flash. GG's CLIK lists ask
++            // for "gg.menu.MainListRenderer" while the class is the top-level "MainListRenderer",
++            // so retry with the unqualified name, then in the root movie's domain.
++            Err(e) => {
++                let full = name.to_string();
++                let short = full.rsplit(['.', ':']).next().unwrap_or(&full).to_string();
++                let root = *activation.context.root_swf;
++                let root_domain = activation.context.library.library_for_movie_mut(root).avm2_domain();
++                let mut candidates = vec![(appdomain, short.clone())];
++                if root_domain != appdomain {
++                    candidates.push((root_domain, full.clone()));
++                    candidates.push((root_domain, short.clone()));
++                }
++                for (domain, n) in candidates {
++                    if n == full && domain == appdomain {
++                        continue;
++                    }
++                    let n = AvmString::new_utf8(activation.gc(), n);
++                    if let Ok(v) = domain.get_defined_value_handling_vector(activation, n) {
++                        return Ok(v);
++                    }
++                }
++                Err(e)
++            }
++        }
+     } else {
+         // For some reason this throws error #1507, so we can't use
+         // `get_string_non_null` to get the argument
+diff --git a/core/src/avm2/method.rs b/core/src/avm2/method.rs
+index f9b68981..3b0a310e 100644
+--- a/core/src/avm2/method.rs
++++ b/core/src/avm2/method.rs
+@@ -237,6 +237,33 @@ impl<'gc> Method<'gc> {
+         )))
+     }
+ 
++    /// GoatRust patch (gfx_bridge): a copy of this native method that runs another Rust
++    /// function. Lets a host create AS3 function objects (event listeners, init callbacks).
++    pub fn with_native_impl(self, mc: &gc_arena::Mutation<'gc>, native_method: NativeMethodImpl) -> Self {
++        let d = &*self.0;
++        let association = OnceLock::new();
++        if let Some(a) = d.association.get() {
++            // SAFETY: not inside a Gc yet, so no write barrier is needed
++            let _ = unsafe { Write::assume(&association) }.unlock().set(*a);
++        }
++        Self(Gc::new(
++            mc,
++            MethodData {
++                txunit: d.txunit,
++                abc: d.abc.clone(),
++                abc_method: d.abc_method,
++                abc_method_body: d.abc_method_body,
++                method_kind: MethodKind::Native { native_method, fast_call: false },
++                signature: d.signature.clone(),
++                return_type: d.return_type,
++                resolved_info: OnceLock::new(),
++                association,
++                is_function: d.is_function,
++                is_unchecked: d.is_unchecked,
++            },
++        ))
++    }
++
+     /// Get the underlying ABC file.
+     pub fn abc(self) -> Rc<AbcFile> {
+         self.0.txunit.abc()
+diff --git a/core/src/backend/navigator.rs b/core/src/backend/navigator.rs
+index 9d02cc0a..cc924a9a 100644
+--- a/core/src/backend/navigator.rs
++++ b/core/src/backend/navigator.rs
+@@ -429,6 +429,10 @@ pub struct NullNavigatorBackend {
+ 
+     /// The base path for all relative fetches.
+     relative_base_path: PathBuf,
++
++    /// GoatRust patch: Scaleform `img://Package.Texture` URLs are served from this folder
++    /// (file `<folder>/<package.texture>` in lower case, written by the host).
++    pub image_base_path: Option<PathBuf>,
+ }
+ 
+ impl NullNavigatorBackend {
+@@ -437,6 +441,7 @@ impl NullNavigatorBackend {
+         Self {
+             spawner: executor.spawner(),
+             relative_base_path: PathBuf::new(),
++            image_base_path: None,
+         }
+     }
+ 
+@@ -444,6 +449,7 @@ impl NullNavigatorBackend {
+         Ok(Self {
+             spawner: executor.spawner(),
+             relative_base_path: path.canonicalize()?,
++            image_base_path: None,
+         })
+     }
+ }
+@@ -464,6 +470,9 @@ impl NavigatorBackend for NullNavigatorBackend {
+     }
+ 
+     fn fetch(&self, request: Request) -> OwnedFuture<Box<dyn SuccessResponse>, ErrorResponse> {
++        if request.url().starts_with("img://") {
++            return fetch_path(self, "NullNavigatorBackend", request.url(), self.image_base_path.as_deref());
++        }
+         fetch_path(self, "NullNavigatorBackend", request.url(), None)
+     }
+ 
+diff --git a/core/src/gfx_bridge.rs b/core/src/gfx_bridge.rs
+new file mode 100644
+index 00000000..46e87e9d
+--- /dev/null
++++ b/core/src/gfx_bridge.rs
+@@ -0,0 +1,322 @@
++//! GoatRust patch: a small public bridge into AVM2 so a host can drive a movie the way Scaleform's
++//! GFxObject API does (UnrealScript AttachMovie / Invoke / GetString / SetString ...).
++//!
++//! The host holds AS3 values through `Handle`s (GC roots), so GFxObjects stay valid for as long
++//! as the host keeps them. ActionScript calls back into the host through function objects made
++//! by `host_function` (CLIK event listeners, the CLIK init callback) and through
++//! `ExternalInterface.call` once `enable_host_calls` ran; both queue a `HostCall` that the host
++//! collects with `take_calls` right after the Player call that produced it (same thread).
++
++use crate::avm2::object::FunctionObject;
++use crate::avm2::{Activation, Error as Avm2Error, FunctionArgs, Value as Avm2Value};
++use crate::context::UpdateContext;
++use crate::display_object::{TDisplayObject, TDisplayObjectContainer};
++use crate::string::AvmString;
++use crate::Player;
++use gc_arena::{DynamicRoot, Gc, Rootable};
++use std::cell::{Cell, RefCell};
++
++/// An AS3 value kept alive for the host.
++#[derive(Clone)]
++pub struct Handle(DynamicRoot<Rootable![Avm2Value<'_>]>);
++
++impl std::fmt::Debug for Handle {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        write!(f, "Handle({:p})", self.0.as_ptr())
++    }
++}
++
++impl Handle {
++    fn new<'gc>(context: &UpdateContext<'gc>, v: Avm2Value<'gc>) -> Self {
++        Self(context.dynamic_root.stash(context.gc(), Gc::new(context.gc(), v)))
++    }
++    fn fetch<'gc>(&self, context: &UpdateContext<'gc>) -> Avm2Value<'gc> {
++        *context.dynamic_root.fetch(&self.0)
++    }
++}
++
++/// A value crossing the bridge.
++#[derive(Clone, Debug)]
++pub enum BridgeValue {
++    Undefined,
++    Null,
++    Bool(bool),
++    Number(f64),
++    String(String),
++    Object(Handle),
++}
++
++/// ActionScript calling the host.
++#[derive(Clone, Debug)]
++pub enum HostCall {
++    /// A function made by `host_function(id)` was called with these arguments.
++    Function { id: u64, args: Vec<BridgeValue> },
++    /// `ExternalInterface.call(name, ...args)`.
++    External { name: String, args: Vec<BridgeValue> },
++}
++
++thread_local! {
++    static CALLS: RefCell<Vec<HostCall>> = const { RefCell::new(Vec::new()) };
++    static HOST_CALLS: Cell<bool> = const { Cell::new(false) };
++}
++
++/// Calls ActionScript made into the host since the last `take_calls` (this thread).
++pub fn take_calls() -> Vec<HostCall> {
++    CALLS.with(|c| std::mem::take(&mut *c.borrow_mut()))
++}
++
++/// Route `ExternalInterface.call` to the host (and report `ExternalInterface.available`).
++pub fn enable_host_calls(on: bool) {
++    HOST_CALLS.with(|c| c.set(on));
++}
++
++pub(crate) fn host_calls_enabled() -> bool {
++    HOST_CALLS.with(|c| c.get())
++}
++
++/// flash.external.ExternalInterface.call while host calls are enabled.
++pub(crate) fn external_call<'gc>(activation: &mut Activation<'_, 'gc>, name: String, args: FunctionArgs<'_, 'gc>) -> Avm2Value<'gc> {
++    let args: Vec<BridgeValue> = args.iter().skip(1).map(|a| from_avm(activation, a)).collect();
++    CALLS.with(|c| c.borrow_mut().push(HostCall::External { name, args }));
++    Avm2Value::Undefined
++}
++
++/// An AVM2 error as text: the thrown Error's class, id and message when ActionScript threw one.
++fn err<'gc>(activation: &mut Activation<'_, 'gc>, e: Avm2Error<'gc>) -> String {
++    let s = match e.as_avm_error() {
++        Some(v) => {
++            let mut get = |n: &str| {
++                let name = AvmString::new_utf8(activation.gc(), n);
++                v.get_public_property(name, activation).ok().map(|x| x.as_debug_string(activation).unwrap_or_default()).unwrap_or_default()
++            };
++            let (id, msg) = (get("errorID"), get("message"));
++            let class = v.instance_of_class_name(activation).to_string();
++            format!("{class} #{id}: {msg}")
++        }
++        None => format!("{e:?}"),
++    };
++    s.chars().take(400).collect()
++}
++
++fn to_avm<'gc>(activation: &mut Activation<'_, 'gc>, v: &BridgeValue) -> Avm2Value<'gc> {
++    match v {
++        BridgeValue::Undefined => Avm2Value::Undefined,
++        BridgeValue::Null => Avm2Value::Null,
++        BridgeValue::Bool(b) => (*b).into(),
++        BridgeValue::Number(n) => (*n).into(),
++        BridgeValue::String(s) => AvmString::new_utf8(activation.gc(), s.as_str()).into(),
++        BridgeValue::Object(h) => h.fetch(activation.context),
++    }
++}
++
++fn from_avm<'gc>(activation: &mut Activation<'_, 'gc>, v: Avm2Value<'gc>) -> BridgeValue {
++    match v {
++        Avm2Value::Undefined => BridgeValue::Undefined,
++        Avm2Value::Null => BridgeValue::Null,
++        Avm2Value::Bool(b) => BridgeValue::Bool(b),
++        Avm2Value::Number(_) | Avm2Value::Integer(_) => BridgeValue::Number(v.as_f64()),
++        Avm2Value::String(s) => BridgeValue::String(s.to_string()),
++        Avm2Value::Object(_) => BridgeValue::Object(Handle::new(activation.context, v)),
++    }
++}
++
++fn with<R>(player: &mut Player, f: impl for<'gc> FnOnce(&mut Activation<'_, 'gc>) -> Result<R, String>) -> Result<R, String> {
++    player.mutate_with_update_context(|context| {
++        let mut activation = Activation::from_nothing(context);
++        f(&mut activation)
++    })
++}
++
++fn object<'gc>(activation: &mut Activation<'_, 'gc>, h: &Handle) -> Result<Avm2Value<'gc>, String> {
++    let v = h.fetch(activation.context);
++    if matches!(v, Avm2Value::Object(_)) { Ok(v) } else { Err("not an object".into()) }
++}
++
++/// The root MovieClip (`root` / `_root` in Scaleform paths).
++pub fn root(player: &mut Player) -> Result<Handle, String> {
++    with(player, |activation| {
++        let clip = activation.context.stage.root_clip().ok_or("no root clip")?;
++        let o = clip.object2().ok_or("root has no AS3 object")?;
++        Ok(Handle::new(activation.context, o.into()))
++    })
++}
++
++/// A class (or any value) defined in the root movie's domain, e.g. "scaleform.gfx.Extensions".
++pub fn definition(player: &mut Player, name: &str) -> Result<Handle, String> {
++    with(player, |activation| {
++        let v = lookup(activation, name)?;
++        Ok(Handle::new(activation.context, v))
++    })
++}
++
++fn lookup<'gc>(activation: &mut Activation<'_, 'gc>, name: &str) -> Result<Avm2Value<'gc>, String> {
++    let clip = activation.context.stage.root_clip().ok_or("no root clip")?;
++    let movie = clip.movie();
++    let domain = activation.context.library.library_for_movie_mut(movie).avm2_domain();
++    let n = AvmString::new_utf8(activation.gc(), name);
++    domain.get_defined_value_handling_vector(activation, n).map_err(|e| format!("{name}: {}", err(activation, e)))
++}
++
++/// Read property `name` of an object (array elements by index: "0", "1"...).
++pub fn get(player: &mut Player, target: &Handle, name: &str) -> Result<BridgeValue, String> {
++    with(player, |activation| {
++        let t = object(activation, target)?;
++        let n = AvmString::new_utf8(activation.gc(), name);
++        let v = t.get_public_property(n, activation).map_err(|e| format!("get {name}: {}", err(activation, e)))?;
++        Ok(from_avm(activation, v))
++    })
++}
++
++/// Set property `name` of an object.
++pub fn set(player: &mut Player, target: &Handle, name: &str, value: &BridgeValue) -> Result<(), String> {
++    with(player, |activation| {
++        let t = object(activation, target)?;
++        let v = to_avm(activation, value);
++        let n = AvmString::new_utf8(activation.gc(), name);
++        t.set_public_property(n, v, activation).map_err(|e| format!("set {name}: {}", err(activation, e)))
++    })
++}
++
++/// Call `method` on an object.
++pub fn invoke(player: &mut Player, target: &Handle, method: &str, args: &[BridgeValue]) -> Result<BridgeValue, String> {
++    with(player, |activation| {
++        let t = object(activation, target)?;
++        let args: Vec<Avm2Value> = args.iter().map(|a| to_avm(activation, a)).collect();
++        let m = AvmString::new_utf8(activation.gc(), method);
++        let r = t.call_public_property(m, FunctionArgs::from_slice(&args), activation).map_err(|e| format!("{method}: {}", err(activation, e)))?;
++        Ok(from_avm(activation, r))
++    })
++}
++
++/// Construct an instance of a class by name ("Object", "Array", "scaleform.clik.data.DataProvider").
++pub fn construct(player: &mut Player, class: &str, args: &[BridgeValue]) -> Result<Handle, String> {
++    with(player, |activation| {
++        let c = lookup(activation, class)?;
++        let args: Vec<Avm2Value> = args.iter().map(|a| to_avm(activation, a)).collect();
++        let v = c.construct(activation, FunctionArgs::from_slice(&args)).map_err(|e| format!("new {class}: {}", err(activation, e)))?;
++        Ok(Handle::new(activation.context, v))
++    })
++}
++
++/// AttachMovie: an instance of an exported symbol (`linkage`), added to `parent` as child `name`
++/// (at `depth`, or on top when negative) and also set as a property of the parent.
++pub fn attach_movie(player: &mut Player, parent: &Handle, linkage: &str, name: &str, depth: i32) -> Result<Handle, String> {
++    with(player, |activation| {
++        let parent_v = object(activation, parent)?;
++        let class = lookup(activation, linkage)?;
++        let instance = class.construct(activation, FunctionArgs::from_slice(&[])).map_err(|e| format!("new {linkage}: {}", err(activation, e)))?;
++        add_child(activation, parent_v, instance, name, depth)?;
++        Ok(Handle::new(activation.context, instance))
++    })
++}
++
++/// CreateEmptyMovieClip: a new flash.display.MovieClip child of `parent`.
++pub fn create_empty_movie_clip(player: &mut Player, parent: &Handle, name: &str, depth: i32) -> Result<Handle, String> {
++    with(player, |activation| {
++        let parent_v = object(activation, parent)?;
++        let class = lookup(activation, "flash.display.MovieClip")?;
++        let instance = class.construct(activation, FunctionArgs::from_slice(&[])).map_err(|e| format!("new MovieClip: {}", err(activation, e)))?;
++        add_child(activation, parent_v, instance, name, depth)?;
++        Ok(Handle::new(activation.context, instance))
++    })
++}
++
++fn add_child<'gc>(activation: &mut Activation<'_, 'gc>, parent: Avm2Value<'gc>, child: Avm2Value<'gc>, name: &str, depth: i32) -> Result<(), String> {
++    let iname = AvmString::new_utf8(activation.gc(), name);
++    child.set_public_property(AvmString::new_utf8(activation.gc(), "name"), iname.into(), activation).map_err(|e| format!("name: {}", err(activation, e)))?;
++    let n_children = parent
++        .as_object()
++        .and_then(|o| o.as_display_object())
++        .and_then(|d| d.as_container())
++        .map(|c| c.num_children())
++        .unwrap_or(0);
++    if depth >= 0 && (depth as usize) < n_children {
++        let add = AvmString::new_utf8(activation.gc(), "addChildAt");
++        parent
++            .call_public_property(add, FunctionArgs::from_slice(&[child, (depth as f64).into()]), activation)
++            .map_err(|e| format!("addChildAt: {}", err(activation, e)))?;
++    } else {
++        let add = AvmString::new_utf8(activation.gc(), "addChild");
++        parent.call_public_property(add, FunctionArgs::from_slice(&[child]), activation).map_err(|e| format!("addChild: {}", err(activation, e)))?;
++    }
++    // reachable by name like Scaleform's AttachMovie (MovieClips are dynamic)
++    let _ = parent.set_public_property(iname, child, activation);
++    Ok(())
++}
++
++/// The native body behind every `host_function`: the receiver carries the id.
++fn host_function_impl<'gc>(activation: &mut Activation<'_, 'gc>, this: Avm2Value<'gc>, args: FunctionArgs<'_, 'gc>) -> Result<Avm2Value<'gc>, Avm2Error<'gc>> {
++    let id = this.as_f64() as u64;
++    let args: Vec<BridgeValue> = args.iter().map(|a| from_avm(activation, a)).collect();
++    CALLS.with(|c| c.borrow_mut().push(HostCall::Function { id, args }));
++    Ok(Avm2Value::Undefined)
++}
++
++/// An AS3 Function that queues `HostCall::Function { id, args }` when called. It is a copy of
++/// the variadic builtin `trace` with another native body, bound to the receiver `id`.
++pub fn host_function(player: &mut Player, id: u64) -> Result<Handle, String> {
++    with(player, |activation| {
++        let global = activation.avm2().toplevel_global_object().ok_or("no global object")?;
++        let trace = Avm2Value::from(global).get_public_property(AvmString::new_utf8(activation.gc(), "trace"), activation).map_err(|e| err(activation, e))?;
++        let f: FunctionObject = trace.as_object().and_then(|o| o.as_function_object()).ok_or("trace is not a function")?;
++        let exec = f.executable();
++        let method = exec.as_method().with_native_impl(activation.gc(), host_function_impl);
++        let func = FunctionObject::from_method(activation.context, method, exec.scope(), Some(Avm2Value::Number(id as f64)), None);
++        Ok(Handle::new(activation.context, func.into()))
++    })
++}
++
++/// Call a function value with `this` (Null = none).
++pub fn call(player: &mut Player, function: &Handle, this: &BridgeValue, args: &[BridgeValue]) -> Result<BridgeValue, String> {
++    with(player, |activation| {
++        let f = object(activation, function)?;
++        let this = to_avm(activation, this);
++        let args: Vec<Avm2Value> = args.iter().map(|a| to_avm(activation, a)).collect();
++        let r = f.call(activation, this, FunctionArgs::from_slice(&args)).map_err(|e| err(activation, e))?;
++        Ok(from_avm(activation, r))
++    })
++}
++
++/// `String(value)` for logs.
++pub fn describe(player: &mut Player, v: &BridgeValue) -> String {
++    with(player, |activation| {
++        let a = to_avm(activation, v);
++        Ok(match a {
++            Avm2Value::Object(o) => {
++                let cls = a.instance_of_class_name(activation).to_string();
++                let name = o.as_display_object().map(|d| d.name().map(|n| n.to_string()).unwrap_or_default()).unwrap_or_default();
++                format!("[{cls} {name}]")
++            }
++            other => format!("{other:?}"),
++        })
++    })
++    .unwrap_or_default()
++}
++
++/// Two handles to the same AS3 object.
++pub fn same(player: &mut Player, a: &Handle, b: &Handle) -> bool {
++    with(player, |activation| Ok(a.fetch(activation.context).strict_eq(&b.fetch(activation.context)))).unwrap_or(false)
++}
++
++/// Debug: what the stage holds.
++pub fn describe_stage(player: &mut Player) -> String {
++    player.mutate_with_update_context(|context| {
++        let stage = context.stage;
++        let root = stage.root_clip();
++        format!(
++            "stage children {}, root clip {}, root object {}, playing {}",
++            stage.as_container().map(|c| c.num_children()).unwrap_or(0),
++            root.is_some(),
++            root.and_then(|r| r.object2()).is_some(),
++            context.root_swf.is_action_script_3()
++        )
++    })
++}
++
++/// Debug: look a class up by name in the root movie's domain.
++pub fn lookup_class(player: &mut Player, name: &str) -> Result<String, String> {
++    with(player, |activation| {
++        let v = lookup(activation, name)?;
++        Ok(format!("{v:?}").chars().take(80).collect())
++    })
++}
+diff --git a/core/src/lib.rs b/core/src/lib.rs
+index d76c1cba..b394a1e4 100644
+--- a/core/src/lib.rs
++++ b/core/src/lib.rs
+@@ -55,6 +55,8 @@ pub mod config;
+ #[cfg(feature = "egui")]
+ pub mod debug_ui;
+ pub mod external;
++/// GoatRust patch: host access to AVM2 (Scaleform-style GFxObject calls).
++pub mod gfx_bridge;
+ pub mod i18n;
+ pub mod stub;
+ 
+diff --git a/swf/src/read.rs b/swf/src/read.rs
+index a0834337..40921090 100644
+--- a/swf/src/read.rs
++++ b/swf/src/read.rs
+@@ -1936,6 +1936,9 @@ impl<'a> Reader<'a> {
+                 let id = self.read_u16()?;
+                 PlaceObjectAction::Replace(id)
+             }
++            // GoatRust patch: Scaleform movies place some symbols by class name only (no
++            // character id, no move flag); read it as a modify so the rest of the sprite parses
++            (false, false) if has_class_name => PlaceObjectAction::Modify,
+             _ => return Err(Error::invalid_data("Invalid PlaceObject type")),
+         };
+         let matrix = if flags.contains(PlaceFlag::HAS_MATRIX) {

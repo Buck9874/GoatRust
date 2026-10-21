@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["upk", "goat", "gfxui"]
+# reference/ holds third-party source checkouts (Ruffle has its own workspace)
+exclude = ["reference"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# bevy_pbr 0.19.1 with lightmap slots shared per image (see patches/README.md)
+[patch.crates-io]
+bevy_pbr = { path = "patches/bevy_pbr" }
+
+# release packages (tools/package.py): release, without debug info
+[profile.dist]
+inherits = "release"
+strip = true
+debug = false

@@ -1,0 +1,12 @@
+[package]
+name = "upk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+flate2 = "1"
+half = "2"
+bcdec_rs = "0.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+lewton = "0.10"

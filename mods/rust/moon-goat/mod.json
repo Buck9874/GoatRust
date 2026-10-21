@@ -1,0 +1,9 @@
+{
+  "id": "moon-goat",
+  "name": "Moon Goat",
+  "author": "GoatRust",
+  "version": "1.0",
+  "description": "Low gravity for everything, higher jumps and more control in the air. Double jumps reach the rooftops.",
+  "preview": "preview.png",
+  "tweaks": { "gravity": 0.35, "jump_z": 1.3, "air_control": 2.0 }
+}

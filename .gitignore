@@ -1,0 +1,14 @@
+# build output
+target/
+# generated, decompiled and dumped material from the user's own game install: never committed
+out/
+# third-party checkouts (Ruffle, UEViewer, PhysX); our Ruffle changes live in tools/ruffle-goatrust.patch
+reference/
+# downloaded Steam Workshop mods (other people's work), caches, logs and local settings
+mods/workshop/
+mods/cache/
+mods/enabled.json
+mods/*.txt
+save/
+*.log
+dist/

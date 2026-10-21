@@ -1,0 +1,15 @@
+[package]
+name = "gfxui"
+version = "0.1.0"
+edition = "2024"
+description = "Goat Simulator's Scaleform (GFx) menus, played with Ruffle and rendered offscreen"
+
+[dependencies]
+anyhow = "1"
+futures = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+ruffle_core = { path = "../reference/ruffle/core", features = ["default_font"] }
+ruffle_render_wgpu = { path = "../reference/ruffle/render/wgpu" }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

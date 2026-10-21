@@ -1,0 +1,9 @@
+{
+  "id": "speedy-goat",
+  "name": "Speedy Goat",
+  "author": "GoatRust",
+  "version": "1.0",
+  "description": "Walks and sprints 60% faster and headbutts twice as hard.",
+  "preview": "preview.png",
+  "tweaks": { "walk_speed": 1.6, "sprint_speed": 1.6, "headbutt": 2.0 }
+}

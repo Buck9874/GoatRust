@@ -1,0 +1,15 @@
+[package]
+name = "goat"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+upk = { path = "../upk" }
+gfxui = { path = "../gfxui" }
+anyhow = "1"
+bevy = { version = "0.19", default-features = false, features = ["3d", "ui", "png", "bevy_audio", "vorbis", "bevy_window", "bevy_winit", "bevy_ui", "bevy_text", "default_font", "multi_threaded", "tonemapping_luts", "bevy_gizmos", "x11", "std"] }
+rapier3d = "0.36"
+# mod menu: Steam Workshop listing/downloads, preview images, mod.json
+ureq = "3"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+serde_json = "1"
