@@ -381,6 +381,25 @@ pub type MoverCmd = (String, [f32; 3], [i32; 3], ([f32; 3], [i32; 3]));
 
 /// Every entity named like the actor (one per mesh component, world.rs) keeps its offset from the
 /// actor; static colliders recorded for the actor (Physics::movers) follow.
+/// Script SetHidden on map actors: their level meshes (entities named after the actor) hide/show.
+pub fn map_visibility(mut sa: ResMut<super::actors::ScriptActors>, mut q: Query<(&Name, &mut Visibility), Without<ChildOf>>) {
+    if sa.hidden_queue.is_empty() {
+        return;
+    }
+    let mut latest: HashMap<String, bool> = HashMap::new();
+    for (n, h) in sa.hidden_queue.drain(..) {
+        latest.insert(n.to_ascii_lowercase(), h);
+    }
+    for (n, mut v) in &mut q {
+        if let Some(&hidden) = latest.get(&n.as_str().to_ascii_lowercase()) {
+            let want = if hidden { Visibility::Hidden } else { Visibility::Inherited };
+            if *v != want {
+                *v = want;
+            }
+        }
+    }
+}
+
 pub fn movers(
     mut sa: ResMut<super::actors::ScriptActors>,
     mut phys: ResMut<crate::physics::Physics>,

@@ -142,8 +142,11 @@ impl Host {
     /// Fire the timers that came due: UI objects' (`ui`: menu views, set on the player
     /// controller, which UE3 keeps ticking while the game is paused) or the world's.
     pub fn run_timers(&mut self, dt: f32, ui: bool) {
-        let actor = self.vm.class_by_name("Actor");
-        let is_ui = |vm: &Vm, o: ObjId| actor.is_some_and(|a| !vm.is_child_of(vm.obj(o).class, a));
+        // menu timers aim at Scaleform objects (widgets, views, movies) and run while the game is
+        // paused under a menu; everything else (actors, mutator components) runs with the world,
+        // inside its script <-> goat sync
+        let gfx_classes: Vec<usize> = ["GFxObject", "GFxMoviePlayer"].iter().filter_map(|n| self.vm.class_by_name(n)).collect();
+        let is_ui = |vm: &Vm, o: ObjId| gfx_classes.iter().any(|&g| vm.is_child_of(vm.obj(o).class, g));
         let mut fire = vec![];
         let vm = &mut self.vm;
         let flags: Vec<bool> = vm.timers.iter().map(|t| is_ui(vm, t.obj) == ui).collect();
@@ -161,6 +164,10 @@ impl Host {
         vm.timers.retain(|t| t.left > f32::NEG_INFINITY);
         for (o, f) in fire {
             let n = self.vm.name_of(f).to_string();
+            if std::env::var_os("UVM_TIMER_LOG").is_some() {
+                let who = self.vm.obj(o).name.clone();
+                self.vm.say(format!("timer {n} on {who} ({})", if ui { "ui" } else { "world" }));
+            }
             self.vm.call_named(o, &n, vec![]);
         }
     }

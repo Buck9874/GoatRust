@@ -77,6 +77,8 @@ pub enum Place {
     Member(Box<Place>, Sym),
     /// Array element; the zero value grows dynamic arrays on write.
     Index(Box<Place>, usize, Option<Value>),
+    /// A dynamic array's Length (assigning resizes it, with the element zero).
+    Length(Box<Place>, Option<Value>),
     Temp(Value),
 }
 
@@ -608,6 +610,12 @@ impl Vm {
                 Place::Member(Box::new(inner), y)
             }
             Expr::BoolVariable(x) | Expr::InterfaceContext(x) => self.place(x, ctx),
+            // `Array.Length = n` (out_Texts.Length = 0 empties an out array)
+            Expr::DynArrayLength(a) => {
+                let zero = self.elem_zero(a, ctx);
+                let inner = self.place(a, ctx);
+                Place::Length(Box::new(inner), zero)
+            }
             other => Place::Temp(self.eval(other, ctx)),
         }
     }
@@ -676,6 +684,10 @@ impl Vm {
                 },
                 _ => Value::Int(0),
             },
+            Place::Length(inner, _) => match self.read(inner) {
+                Value::Array(a) => Value::Int(a.len() as i32),
+                _ => Value::Int(0),
+            },
             Place::Temp(v) => v.clone(),
         }
     }
@@ -704,6 +716,17 @@ impl Vm {
 
     pub fn write(&mut self, p: &Place, v: Value) {
         if let Place::Temp(_) = p {
+            return;
+        }
+        if let Place::Length(inner, zero) = p {
+            let n = v.int().max(0) as usize;
+            let z = zero.clone().unwrap_or(Value::Int(0));
+            match self.slot_mut(inner) {
+                Some(Value::Array(a)) => a.resize(n, z),
+                // an unset array property: make it
+                Some(slot) => *slot = Value::Array(vec![z; n]),
+                None => {}
+            }
             return;
         }
         if let Some(slot) = self.slot_mut(p) {
@@ -750,7 +773,7 @@ impl Vm {
                     _ => None,
                 }
             }
-            Place::Temp(_) => None,
+            Place::Temp(_) | Place::Length(..) => None,
         }
     }
 

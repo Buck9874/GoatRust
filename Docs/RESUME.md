@@ -714,6 +714,26 @@ GoatVanilla mutators, so DLC-dependent Workshop mods link too (all 6346 of its s
   goatsim_dir.txt next to the exe, the default Steam folder, or any Steam library folder. The
   developer overlay is off when playing (F1 toggles, on in tests, GOAT_DEBUG_HUD=1).
 
+## DLCs (dropped 2026-10-20)
+
+Only the MMO DLC is installed here (Heist, Space and Zombie are empty). A first pass at Goat MMO
+Simulator (2026-10-19) was removed at the user's request; its VM fixes stay, since they help the
+base game and Workshop mods:
+
+- Object.InStr follows FString::InStr (bSearchFromRight, bIgnoreCase, StartPos; it used to treat
+  arg 3 as case sensitivity and ignore StartPos, so scripts scanning a string with StartPos looped).
+- `Array.Length = n` resizes the array (Place::Length; it silently did nothing before).
+- Timers are UI timers only when they aim at a GFxObject / GFxMoviePlayer; a mutator component's
+  timer runs with the world, inside the script <-> goat sync (its Velocity writes were lost).
+  UVM_TIMER_LOG=1 logs fired timers.
+- Object.PathName returns the bare object path (img:// + PathName(Texture) works).
+- Registry::find_path_class / actors::find_skel: skeletal attachments look a path up by class
+  (GoatGame.u can hold an old StaticMesh at the same path as a Startup.upk SkeletalMesh).
+- Texture asset objects carry their tagged properties (scripts read Texture2D.SizeX/SizeY).
+- Script SetHidden on a map actor reaches its level meshes (HostEvent::MapActorHidden ->
+  matinee::map_visibility).
+- upk::font reads UE3 fonts (`upkdump <pkg> font`); nothing in the game uses it yet.
+
 ## Next steps (in order)
 
 1. Port the next native/script systems 1:1 using out/decomp (see Docs/FIDELITY.md): props/KActor
@@ -721,7 +741,7 @@ GoatVanilla mutators, so DLC-dependent Workshop mods link too (all 6346 of its s
 2. Fan specials; race leaderboards are stubs (no online stats); the goat rider (SpawnGoatRider
    NPC) isn't drawn.
 3. NPC bikers. Static-mesh materials through the diffuse_graph baker (world.rs).
-5. DLC maps (Heist/MMO/Space/Zombie folders), vehicles; grow the UnrealScript VM (see its
+5. Vehicles; grow the UnrealScript VM (see its
    section). Menus: pause menu, HUD, main menu with all its views run; the Downloaded list's
    status column shows N/A (localized labels), inventory (I) isn't ported.
 6. (Landscape: checked, the maps' materials have no normal/specular; the per-component MICs only

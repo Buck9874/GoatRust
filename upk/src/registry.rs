@@ -44,6 +44,22 @@ impl Registry {
         (0..self.packages.len()).find_map(|pkg| self.path_index(pkg).get(&key).map(|&export| ObjRef { pkg, export }))
     }
 
+    /// Like `find_path`, but only an export of class `class`: a path can name different objects
+    /// in different packages (GoatGame.u keeps an old StaticMesh MMO_Armor.Mesh.SpikeArmorBack,
+    /// Startup.upk the SkeletalMesh the MMO classes use).
+    pub fn find_path_class(&self, path: &str, class: &str) -> Option<ObjRef> {
+        let key = path.to_lowercase();
+        (0..self.packages.len()).find_map(|pkg| {
+            let &export = self.path_index(pkg).get(&key)?;
+            let p = &self.packages[pkg];
+            if p.class_name(export as i32 + 1).eq_ignore_ascii_case(class) {
+                return Some(ObjRef { pkg, export });
+            }
+            // a later export with the same path in this package (the index keeps the first)
+            (0..p.exports.len()).find(|&i| p.class_name(i as i32 + 1).eq_ignore_ascii_case(class) && p.obj_path(i as i32 + 1).eq_ignore_ascii_case(path)).map(|export| ObjRef { pkg, export })
+        })
+    }
+
     /// Resolve an object index (export or import) seen in package `pkg`.
     pub fn resolve(&self, pkg: usize, obj: i32) -> Option<ObjRef> {
         if obj > 0 {

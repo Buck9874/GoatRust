@@ -31,6 +31,8 @@ pub enum HostEvent {
     Fx(super::fx::FxCmd),
     /// A map actor moved by matinee (Unreal units / rotator), with its initial placement.
     Mover { name: String, location: [f32; 3], rotation: [i32; 3], initial: ([f32; 3], [i32; 3]) },
+    /// A map actor hidden or shown by script (Actor.SetHidden): its meshes follow.
+    MapActorHidden { name: String, hidden: bool },
 }
 
 /// Movement values read back from the script goat after mutators ran.

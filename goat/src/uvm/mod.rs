@@ -915,6 +915,10 @@ impl Vm {
         }
         let o = self.push_obj(Object { class, name, props: HashMap::new(), state: None, outer: None, kind: Kind::Asset { path, class_name: kind }, template_of: None, destroyed: false });
         self.obj_by_ref.insert(r, o);
+        // textures keep their tagged properties: scripts read Texture2D.SizeX/SizeY directly
+        if self.class_by_name("Texture").is_some_and(|t| self.is_child_of(class, t)) {
+            self.apply_tagged(o, r);
+        }
         Some(o)
     }
 

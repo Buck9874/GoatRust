@@ -26,7 +26,7 @@ impl Plugin for MutatorPlugin {
             .add_systems(Update, super::npcs::npcvm_scenario)
             .add_systems(Update, super::matinee::matinee_scenario)
             .add_systems(Update, super::settings::apply_setres)
-            .add_systems(Update, (sync_mutators, tick_mutators, apply_events, super::actors::script_actors, super::matinee::movers, super::fx::script_fx, super::proxies::proxies, super::npcs::script_npcs, super::touch::kismet_touch, show_messages).chain().after(crate::score::tick))
+            .add_systems(Update, (sync_mutators, tick_mutators, apply_events, super::actors::script_actors, super::matinee::movers, super::matinee::map_visibility, super::fx::script_fx, super::proxies::proxies, super::npcs::script_npcs, super::touch::kismet_touch, show_messages).chain().after(crate::score::tick))
             .init_resource::<super::collectibles::Collectibles>()
             .add_systems(Update, super::collectibles::collectibles.after(show_messages))
             // after the animation pose so script bone scales win
@@ -583,6 +583,7 @@ fn apply_events(
             HostEvent::Detach(comp) => script_actors.detach_queue.push(comp),
             HostEvent::Fx(cmd) => script_actors.fx_queue.push(cmd),
             HostEvent::Mover { name, location, rotation, initial } => script_actors.mover_queue.push((name, location, rotation, initial)),
+            HostEvent::MapActorHidden { name, hidden } => script_actors.hidden_queue.push((name, hidden)),
             HostEvent::MaterialParam(mic) => script_actors.tint_queue.push(mic),
             HostEvent::Impulse { actor, impulse, velocity_change } => script_actors.impulses.push((actor, impulse, velocity_change)),
             HostEvent::PlaySound { cue } => {

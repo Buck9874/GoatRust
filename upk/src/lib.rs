@@ -5,6 +5,7 @@ pub mod anim;
 pub mod apex;
 pub mod level;
 pub mod lzo;
+pub mod font;
 pub mod material;
 pub mod matinee;
 pub mod mesh;

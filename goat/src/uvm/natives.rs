@@ -91,10 +91,30 @@ pub fn register(vm: &mut Vm) {
     add("object.rot", |vm, c| vm.rotator(c.int(0), c.int(1), c.int(2)));
     // strings
     add("object.len", |_, c| Value::Int(c.str(0).chars().count() as i32));
+    // InStr(S, T, optional bSearchFromRight, optional bIgnoreCase, optional StartPos), as
+    // FString::InStr: forward from StartPos (clamped), or backward with T ending before StartPos
+    // (default: the end); character indices
     add("object.instr", |_, c| {
         let (s, t) = (c.str(0), c.str(1));
-        let (s, t) = if c.arg(2).truthy() { (s, t) } else { (s.to_lowercase(), t.to_lowercase()) };
-        Value::Int(s.find(&t).map(|i| s[..i].chars().count() as i32).unwrap_or(-1))
+        if std::env::var_os("UVM_OLD_INSTR").is_some() {
+            let (s, t) = if c.arg(2).truthy() { (s, t) } else { (s.to_lowercase(), t.to_lowercase()) };
+            return Value::Int(s.find(&t).map(|i| s[..i].chars().count() as i32).unwrap_or(-1));
+        }
+        let from_right = c.arg(2).truthy();
+        let (s, t) = if c.arg(3).truthy() { (s.to_lowercase(), t.to_lowercase()) } else { (s, t) };
+        let s: Vec<char> = s.chars().collect();
+        let t: Vec<char> = t.chars().collect();
+        let start = if c.given(4) { Some(c.int(4)) } else { None };
+        let at = |i: usize| s.len() >= i + t.len() && s[i..i + t.len()] == t[..];
+        let found = if !from_right {
+            let from = start.map(|p| p.clamp(0, (s.len() as i32 - 1).max(0)) as usize).unwrap_or(0);
+            (from..s.len().max(1)).find(|&i| at(i)).filter(|_| !t.is_empty() || from <= s.len())
+        } else {
+            let start = start.unwrap_or(s.len() as i32);
+            let first = start - t.len().max(1) as i32;
+            (0..=first.max(-1)).rev().filter(|&i| i >= 0).map(|i| i as usize).find(|&i| at(i))
+        };
+        Value::Int(found.map(|i| i as i32).unwrap_or(-1))
     });
     add("object.mid", |_, c| {
         let s: Vec<char> = c.str(0).chars().collect();
@@ -166,7 +186,25 @@ pub fn register(vm: &mut Vm) {
         let n = vm.frames().last().map(|f| vm.funcs[f.func].name).unwrap_or_default();
         Value::Name(n)
     });
-    add("object.pathname", |vm, c| Value::Str(c.obj(0).map(|o| vm.describe(&Value::Obj(Some(o)))).unwrap_or_else(|| "None".into())));
+    // Object.PathName: Package.Group.Name (no class quote: "img://" + PathName(Texture) must
+    // name the texture); script objects: their outer chain
+    add("object.pathname", |vm, c| {
+        let Some(o) = c.obj(0) else { return Value::Str("None".into()) };
+        if let Kind::Asset { path, .. } = &vm.obj(o).kind {
+            return Value::Str(path.clone());
+        }
+        let mut parts = vec![vm.obj(o).name.clone()];
+        let mut cur = vm.obj(o).outer;
+        while let Some(x) = cur {
+            if parts.len() > 16 {
+                break;
+            }
+            parts.push(vm.obj(x).name.clone());
+            cur = vm.obj(x).outer;
+        }
+        parts.reverse();
+        Value::Str(parts.join("."))
+    });
     add("object.dynamicloadobject", |vm, c| {
         let path = c.str(0);
         let found = vm.reg.find_path(&path).or_else(|| {
@@ -360,7 +398,13 @@ pub fn register(vm: &mut Vm) {
     });
     add("actor.sethidden", |vm, c| {
         if let Some(o) = c.this {
-            vm.set(o, "bHidden", Value::Bool(c.arg(0).truthy()));
+            let hidden = c.arg(0).truthy();
+            vm.set(o, "bHidden", Value::Bool(hidden));
+            // a map actor (quest zone highlights...): its meshes in the level follow
+            if vm.map_pkg.is_some() && vm.ref_of.get(&o).is_some_and(|r| Some(r.pkg) == vm.map_pkg) {
+                let name = vm.obj(o).name.clone();
+                vm.events.push(bridge::HostEvent::MapActorHidden { name, hidden });
+            }
         }
         Value::Int(0)
     });

@@ -55,6 +55,8 @@ pub struct ScriptActors {
     pub fx_queue: Vec<super::fx::FxCmd>,
     /// Matinee moves of map actors, handled by matinee::movers.
     pub mover_queue: Vec<super::matinee::MoverCmd>,
+    /// Map actors hidden / shown by script, handled by matinee::map_visibility.
+    pub hidden_queue: Vec<(String, bool)>,
 }
 
 impl ScriptActors {
@@ -99,6 +101,16 @@ fn to_bevy(v: [f32; 3]) -> Vec3 {
 }
 fn to_ue(v: Vec3) -> [f32; 3] {
     [v.x / convert::S, v.z / convert::S, v.y / convert::S]
+}
+
+/// A skeletal mesh by path in the VM's packages, then the game's (skipping same-path objects of
+/// other classes).
+pub(crate) fn find_skel<'a>(vm_reg: &'a Registry, game: Option<&'a Registry>, path: &str) -> Option<(&'a Registry, ObjRef)> {
+    if let Some(r) = vm_reg.find_path_class(path, "SkeletalMesh") {
+        return Some((vm_reg, r));
+    }
+    let g = game?;
+    g.find_path_class(path, "SkeletalMesh").map(|r| (g, r))
 }
 
 /// Find an object path in the VM's packages, then the game's.
@@ -429,14 +441,14 @@ pub fn script_actors(
                 vm.say(format!("attach {cn} to {socket}: nothing to show"));
                 continue;
             };
-            let Some((kreg, kref)) = find(&vm.reg, game, &spath) else {
+            let Some((kreg, kref)) = find_skel(&vm.reg, game, &spath) else {
                 vm.say(format!("attach: skeletal mesh {spath} not found"));
                 continue;
             };
             let data = match crate::rig::load(kreg, &mut sa.skel_cache, kref, None, None, &mut assets) {
                 Ok(d) => d,
                 Err(e) => {
-                    vm.say(format!("attach: skeletal mesh {spath}: {e:#}"));
+                    vm.say(format!("attach: skeletal mesh {spath} ({} export {}): {e:#}", kreg.pkg(kref).name, kref.export));
                     continue;
                 }
             };

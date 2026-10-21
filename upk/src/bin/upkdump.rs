@@ -132,6 +132,20 @@ fn main() -> Result<()> {
             for inst in &l.instances { for &m in &inst.materials { if m != 0 { mats.insert(m, ()); } } }
             for (m, _) in mats.iter().take(15) { let r = upk::material::resolve(&p, *m); println!("mat {} -> {:?} {:?}", p.obj_path(*m), r.diffuse.map(|d| p.obj_path(d.export as i32 + 1)), r.color); }
         }
+        "font" => {
+            let f = filter.clone().unwrap_or_default();
+            for i in 0..p.exports.len() {
+                if p.class_name(i as i32 + 1) != "Font" || !p.obj_path(i as i32 + 1).to_lowercase().contains(&f) { continue; }
+                match upk::font::Font::parse(&p, i) {
+                    Ok(ft) => {
+                        let (w, h) = ft.measure("Hello Goat");
+                        println!("{} glyphs {} pages {:?} remap {} (remapped {}) max height {} 'Hello Goat' = {w}x{h}", p.obj_path(i as i32 + 1), ft.glyphs.len(), ft.pages, ft.remap.len(), ft.remapped, ft.max_height);
+                        if let Some(g) = ft.glyph('A') { println!("  'A' = {g:?}"); }
+                    }
+                    Err(e) => println!("{} ERROR {e:#}", p.obj_path(i as i32 + 1)),
+                }
+            }
+        }
         "skel" => {
             let f = filter.clone().unwrap_or_default();
             for i in 0..p.exports.len() {
